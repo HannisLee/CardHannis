@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CardHannis WebUI</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">C</span><span>CardHannis</span></div>
+      <div class="sidebar-section-label">工作台</div>
+      <nav class="nav-list" id="filters"></nav>
+      <div class="sidebar-footer"><div class="sync-dot"></div><span>FastAPI WebUI 原型</span></div>
+    </aside>
+    <section class="content">
+      <header class="topbar">
+        <div><div class="eyebrow" id="today"></div><h1>今天做什么？</h1></div>
+        <button class="avatar" type="button" aria-label="用户">H</button>
+      </header>
+      <section class="focus-card">
+        <div class="focus-copy">
+          <span class="focus-kicker">今日焦点</span>
+          <h2 id="focus-title"></h2>
+          <p id="focus-description"></p>
+        </div>
+        <div class="focus-orbit"><strong id="completed-count">0</strong><small>已完成</small></div>
+      </section>
+      <section class="tasks-section">
+        <div class="section-heading">
+          <div><span class="eyebrow">TASKS</span><h2>任务列表</h2></div>
+          <button id="new-task" class="primary-button" type="button">＋ 新建任务</button>
+        </div>
+        <div class="task-list" id="tasks"></div>
+      </section>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status"></div>
+  <dialog id="task-dialog">
+    <form method="dialog" id="task-form" class="dialog-card">
+      <button class="dialog-close" value="cancel" aria-label="关闭">×</button>
+      <span class="eyebrow" id="task-form-title">NEW TASK</span>
+      <h2 id="task-form-heading">新建任务</h2>
+      <label>任务标题<input name="title" required maxlength="200" placeholder="例如：整理下周计划" autofocus /></label>
+      <label>备注<textarea name="notes" rows="3" placeholder="可选"></textarea></label>
+      <label>复盘备注<textarea name="review_notes" rows="2" placeholder="可选"></textarea></label>
+      <label>预计分钟数<input name="estimated_active_minutes" type="number" min="0" step="5" placeholder="可选" /></label>
+      <div class="dialog-actions"><button class="secondary-button" value="cancel">取消</button><button class="primary-button" value="default">保存任务</button></div>
+    </form>
+  </dialog>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

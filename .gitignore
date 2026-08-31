@@ -1,0 +1,23 @@
+# Rust build output
+/target/
+
+# Node dependencies and build output
+/node_modules/
+/ui/node_modules/
+/ui/dist/
+
+# Python virtualenv and caches
+/web/.venv/
+/web/**/__pycache__/
+*.py[cod]
+
+# Local databases and runtime files
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+.DS_Store
+
+# Local environment overrides
+.env
+.env.*
+!.env.example

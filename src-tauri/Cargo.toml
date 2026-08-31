@@ -1,0 +1,22 @@
+[package]
+name = "cardhannis"
+version = "0.1.0"
+description = "CardHannis desktop app"
+authors = ["CardHannis"]
+edition = "2024"
+
+[lib]
+name = "cardhannis_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+cardhannis-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
