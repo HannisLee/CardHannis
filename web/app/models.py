@@ -75,3 +75,8 @@ class WorkSession(BaseModel):
 
 class StartWorkInput(BaseModel):
     note: Optional[str] = None
+
+
+class SupabaseSettingsInput(BaseModel):
+    url: str = ""
+    api_key: str = ""

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -6,12 +7,13 @@ from fastapi.staticfiles import StaticFiles
 
 from . import models
 from .store import StoreError, TaskStore
+from .sync import SyncError, load_settings, save_settings, SupabaseClient, sync_store, validate_settings
 
 def normalize_task(task: dict) -> dict:
     task["is_blocked"] = bool(task.get("is_blocked"))
     return task
 
-DATABASE_PATH = Path.home() / "Library" / "Application Support" / "CardHannis" / "cardhannis.sqlite3"
+DATABASE_PATH = Path(os.environ.get("CARDHANNIS_DB", Path.home() / "Library" / "Application Support" / "CardHannis" / "cardhannis.sqlite3"))
 
 app = FastAPI(title="CardHannis WebUI", version="0.1.0")
 app.state.store = TaskStore(DATABASE_PATH)
@@ -115,6 +117,53 @@ def end_work(session_id: str, request: Request):
         return store(request).end_work(session_id, models.utc_now_iso())
     except StoreError as error:
         raise fail(error) from error
+
+
+@app.get("/api/settings/supabase")
+def get_supabase_settings():
+    settings = load_settings()
+    return {
+        "configured": bool(settings.get("url") and settings.get("key")),
+        "url": settings.get("url", ""),
+        "key_set": bool(settings.get("key")),
+    }
+
+
+@app.put("/api/settings/supabase")
+def update_supabase_settings(input: models.SupabaseSettingsInput):
+    try:
+        existing = load_settings()
+        key = existing.get("key", "") if input.api_key == "__KEEP_EXISTING__" else input.api_key.strip()
+        settings = {"url": input.url.strip().rstrip("/"), "key": key}
+        if settings["url"] or settings["key"]:
+            validate_settings(settings)
+        save_settings(settings["url"], settings["key"])
+        return {
+            "configured": bool(settings["url"] and settings["key"]),
+            "url": settings["url"],
+            "key_set": bool(settings["key"]),
+        }
+    except SyncError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/settings/supabase/test")
+def test_supabase_connection():
+    try:
+        return SupabaseClient(load_settings()).test_connection()
+    except SyncError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/sync")
+def sync(request: Request):
+    try:
+        result = sync_store(store(request), load_settings())
+        return {**result, "synced_at": models.utc_now_iso()}
+    except SyncError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"同步失败: {error}") from error
 
 
 @app.get("/")

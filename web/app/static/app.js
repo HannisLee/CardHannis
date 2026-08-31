@@ -17,6 +17,32 @@ function parseEstimatedMinutes(hours) {
 }
 function notify(message, isError = false) { const toast = byId('toast'); toast.textContent = message; toast.classList.toggle('error', isError); toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2300); }
 
+async function loadSupabaseSettings() {
+  const settings = await api('/api/settings/supabase');
+  const form = byId('settings-form');
+  form.url.value = settings.url || '';
+  form.api_key.value = '';
+  byId('settings-status').textContent = settings.configured ? '已配置。留空 key 将保留现有 key。' : '尚未配置 Supabase。';
+  byId('settings-status').className = `settings-status ${settings.configured ? 'success' : ''}`;
+  return settings;
+}
+
+function showSettingsStatus(message, isError = false) {
+  const status = byId('settings-status');
+  status.textContent = message;
+  status.className = `settings-status ${isError ? 'error' : 'success'}`;
+}
+
+async function saveSupabaseSettings() {
+  const form = byId('settings-form');
+  const current = await api('/api/settings/supabase');
+  const apiKey = form.api_key.value.trim() || (current.key_set ? '__KEEP_EXISTING__' : '');
+  const settings = await api('/api/settings/supabase', { method: 'PUT', body: JSON.stringify({ url: form.url.value.trim(), api_key: apiKey }) });
+  form.api_key.value = '';
+  showSettingsStatus(settings.configured ? '设置已保存。' : 'Supabase 设置已清空。');
+  return settings;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
   if (!response.ok) { let message = `请求失败：${response.status}`; try { const data = await response.json(); message = data.detail || message; } catch {} throw new Error(message); }
@@ -131,3 +157,45 @@ document.addEventListener('click', async (event) => {
 });
 
 loadTasks().catch((error) => notify(error.message, true));
+
+byId('settings-button').addEventListener('click', async () => {
+  try {
+    await loadSupabaseSettings();
+    byId('settings-dialog').showModal();
+  } catch (error) {
+    notify(error.message || '无法读取同步设置', true);
+  }
+});
+
+byId('settings-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    await saveSupabaseSettings();
+    notify('同步设置已保存');
+  } catch (error) {
+    showSettingsStatus(error.message, true);
+    notify(error.message, true);
+  }
+});
+
+byId('test-connection').addEventListener('click', async () => {
+  try {
+    await saveSupabaseSettings();
+    const result = await api('/api/settings/supabase/test', { method: 'POST' });
+    showSettingsStatus(`连接成功，可读取 ${result.task_count_sample} 条任务。`);
+  } catch (error) {
+    showSettingsStatus(error.message, true);
+  }
+});
+
+byId('sync-now').addEventListener('click', async () => {
+  try {
+    await saveSupabaseSettings();
+    const result = await api('/api/sync', { method: 'POST' });
+    byId('settings-dialog').close();
+    await loadTasks();
+    notify(`${result.message}（任务 ${result.tables.tasks} 条）`);
+  } catch (error) {
+    showSettingsStatus(error.message, true);
+  }
+});

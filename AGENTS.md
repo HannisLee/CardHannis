@@ -75,6 +75,14 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 
 ### Web 原型（`web/`）
 
+### Supabase 同步
+
+- `web/app/sync.py` 通过 Supabase REST API 访问远端 `tasks`、`task_blocks`、`work_sessions` 表，不在仓库中保存密钥。
+- `supabase-schema.sql` 是远端初始化脚本；修改核心 schema 时要同步检查该文件。
+- WebUI 的设置接口把 Project URL 和 publishable/anon key 保存到本机应用数据目录的 `supabase.json`，文件权限设为 `0600`。不要使用或提交 `service_role` key。
+- 同步采用本地/远端按时间戳合并，再 upsert 回两端；冲突处理和活动阻塞/工作会话约束见 `web/app/sync.py`。
+- 当前 SQL policy 为个人原型的宽松策略。多人或敏感数据场景必须接入 Supabase Auth 并按用户配置 RLS，不能直接沿用公开读写策略。
+
 - 使用 FastAPI + Uvicorn + Pydantic + Python 标准库 `sqlite3`。
 - `web/app/store.py` 读取 `core/migrations/0001_initial.sql`，因此修改 schema 时必须确保 Rust 和 Python 两端都能初始化同一数据库。
 - 默认数据库为 `~/Library/Application Support/CardHannis/cardhannis.sqlite3`；可按 `web/README.md` 约定支持/实现 `CARDHANNIS_DB` 时同步更新文档和代码（当前代码以固定默认路径初始化）。

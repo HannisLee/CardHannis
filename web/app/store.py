@@ -215,6 +215,70 @@ class TaskStore:
         return dict(row) if row else None
 
 
+    def export_sync_records(self) -> dict[str, list[dict[str, Any]]]:
+        """导出同步所需的真实字段，不包含计算字段 is_blocked。"""
+        with self._lock:
+            tables = {
+                "tasks": "SELECT id,title,notes,review_notes,estimated_active_minutes,created_at,started_at,completed_at,status,sort_order,created_device_id,updated_at,deleted_at,version FROM tasks",
+                "task_blocks": "SELECT id,task_id,started_at,ended_at,reason,note,created_at,updated_at,version,deleted_at FROM task_blocks",
+                "work_sessions": "SELECT id,task_id,started_at,ended_at,note,created_at FROM work_sessions",
+            }
+            return {
+                table: [dict(row) for row in self._connection.execute(sql).fetchall()]
+                for table, sql in tables.items()
+            }
+
+    def upsert_sync_records(self, records: dict[str, list[dict[str, Any]]]) -> None:
+        """写入已经完成冲突裁决的同步快照。任务先写入，确保外键可用。"""
+        tasks = records.get("tasks", [])
+        blocks = records.get("task_blocks", [])
+        sessions = records.get("work_sessions", [])
+        with self._lock:
+            try:
+                self._connection.execute("BEGIN")
+                for row in tasks:
+                    self._connection.execute(
+                        """
+                        INSERT INTO tasks (id,title,notes,review_notes,estimated_active_minutes,created_at,started_at,completed_at,status,sort_order,created_device_id,updated_at,deleted_at,version)
+                        VALUES (:id,:title,:notes,:review_notes,:estimated_active_minutes,:created_at,:started_at,:completed_at,:status,:sort_order,:created_device_id,:updated_at,:deleted_at,:version)
+                        ON CONFLICT(id) DO UPDATE SET
+                          title=excluded.title, notes=excluded.notes, review_notes=excluded.review_notes,
+                          estimated_active_minutes=excluded.estimated_active_minutes, created_at=excluded.created_at,
+                          started_at=excluded.started_at, completed_at=excluded.completed_at, status=excluded.status,
+                          sort_order=excluded.sort_order, created_device_id=excluded.created_device_id,
+                          updated_at=excluded.updated_at, deleted_at=excluded.deleted_at, version=excluded.version
+                        """,
+                        row,
+                    )
+                for row in blocks:
+                    self._connection.execute(
+                        """
+                        INSERT INTO task_blocks (id,task_id,started_at,ended_at,reason,note,created_at,updated_at,version,deleted_at)
+                        VALUES (:id,:task_id,:started_at,:ended_at,:reason,:note,:created_at,:updated_at,:version,:deleted_at)
+                        ON CONFLICT(id) DO UPDATE SET
+                          task_id=excluded.task_id, started_at=excluded.started_at, ended_at=excluded.ended_at,
+                          reason=excluded.reason, note=excluded.note, created_at=excluded.created_at,
+                          updated_at=excluded.updated_at, version=excluded.version, deleted_at=excluded.deleted_at
+                        """,
+                        row,
+                    )
+                for row in sessions:
+                    self._connection.execute(
+                        """
+                        INSERT INTO work_sessions (id,task_id,started_at,ended_at,note,created_at)
+                        VALUES (:id,:task_id,:started_at,:ended_at,:note,:created_at)
+                        ON CONFLICT(id) DO UPDATE SET
+                          task_id=excluded.task_id, started_at=excluded.started_at, ended_at=excluded.ended_at,
+                          note=excluded.note, created_at=excluded.created_at
+                        """,
+                        row,
+                    )
+                self._connection.commit()
+            except Exception:
+                self._connection.rollback()
+                raise
+
+
 def new_id() -> str:
     import uuid
 

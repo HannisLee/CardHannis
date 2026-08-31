@@ -17,7 +17,7 @@
     <section class="content">
       <header class="topbar">
         <div><div class="eyebrow" id="today"></div><h1>今天做什么？</h1></div>
-        <button class="avatar" type="button" aria-label="用户">H</button>
+        <div class="topbar-actions"><button id="settings-button" class="secondary-button" type="button">⚙ 设置</button><button class="avatar" type="button" aria-label="用户">H</button></div>
       </header>
       <section class="focus-card">
         <div class="focus-copy">
@@ -49,6 +49,20 @@
       <div class="dialog-actions"><button class="secondary-button" value="cancel">取消</button><button class="primary-button" value="default">保存任务</button></div>
     </form>
   </dialog>
-  <script type="module" src="/static/app.js?v=hours"></script>
+
+  <dialog id="settings-dialog">
+    <form method="dialog" id="settings-form" class="dialog-card settings-card">
+      <button class="dialog-close" value="cancel" aria-label="关闭">×</button>
+      <span class="eyebrow">SUPABASE</span>
+      <h2>同步设置</h2>
+      <p class="settings-help">连接后可在本地 SQLite 和远程 Supabase 之间同步任务、阻塞记录和工作会话。</p>
+      <label>Project URL<input name="url" type="url" placeholder="https://你的项目.supabase.co" autocomplete="off" /></label>
+      <label>publishable / anon key<input name="api_key" type="password" placeholder="粘贴 Supabase 公钥" autocomplete="off" /></label>
+      <p class="settings-warning">只填写 publishable/anon key，不要填写 service_role key。密钥只保存在当前机器的应用数据目录。</p>
+      <div id="settings-status" class="settings-status"></div>
+      <div class="dialog-actions settings-actions"><button id="test-connection" class="secondary-button" type="button">测试连接</button><button id="sync-now" class="secondary-button" type="button">立即同步</button><button class="primary-button" value="default">保存设置</button></div>
+    </form>
+  </dialog>
+  <script type="module" src="/static/app.js?v=hours-sync"></script>
 </body>
 </html>

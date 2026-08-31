@@ -28,3 +28,11 @@ dialog { border:0;padding:0;background:transparent; }dialog::backdrop { backgrou
 .block-actions { margin-top: 10px; }
 .working-meta { color: #5f8f77; }
 .toast.error { color: #a5533f; background: #fbeae5; border-color: #eac3b8; }
+
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.settings-card { width: 460px; }
+.settings-help, .settings-warning { color: #89918b; font-size: 12px; line-height: 1.6; }
+.settings-warning { padding: 10px 12px; border-radius: 8px; color: #9b6b52; background: #fbf0e9; }
+.settings-status { min-height: 18px; color: #a5533f; font-size: 11px; }
+.settings-status.success { color: #4e836b; }
+.settings-actions { flex-wrap: wrap; }
