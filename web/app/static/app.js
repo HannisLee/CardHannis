@@ -4,6 +4,17 @@ const byId = (id) => document.getElementById(id);
 function formatDate(value) { return value ? new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(new Date(value)) : ''; }
 function escapeHtml(value = '') { return value.replace(/[&<>'"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[c])); }
 function statusText(task) { return task.is_blocked ? '阻塞中' : task.status === 'in_progress' ? '进行中' : task.status === 'completed' ? '已完成' : '待处理'; }
+function formatEstimatedHours(minutes) {
+  if (minutes === null || minutes === undefined) return '未估时';
+  const hours = Number(minutes) / 60;
+  const display = Number.isInteger(hours) ? String(hours) : hours.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  return `预计 ${display} 小时`;
+}
+function parseEstimatedMinutes(hours) {
+  if (hours === '' || hours === null || hours === undefined) return null;
+  const value = Number(hours);
+  return Number.isFinite(value) && value >= 0 ? Math.round(value * 60) : null;
+}
 function notify(message, isError = false) { const toast = byId('toast'); toast.textContent = message; toast.classList.toggle('error', isError); toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2300); }
 
 async function api(path, options = {}) {
@@ -26,7 +37,7 @@ function taskCard(task) {
     <button class="check-button ${done ? 'checked' : ''}" data-action="complete" data-id="${task.id}" aria-label="${done ? '已完成' : '完成任务'}" type="button">${done ? '✓' : ''}</button>
     <div class="task-main"><div class="task-title-row"><h3>${escapeHtml(task.title)}</h3><span class="status-pill ${task.is_blocked ? 'blocked' : task.status}">${statusText(task)}</span></div>
       ${task.notes ? `<p>${escapeHtml(task.notes)}</p>` : ''}
-      <div class="task-meta"><span>${task.estimated_active_minutes ? `预计 ${task.estimated_active_minutes} 分钟` : '未估时'}</span><span>更新于 ${formatDate(task.updated_at)}</span>${session ? `<span class="working-meta">正在计时：${formatDate(session.started_at)} 开始</span>` : ''}${task.is_blocked ? '<span class="block-meta">需要处理依赖</span>' : ''}</div>
+      <div class="task-meta"><span>${formatEstimatedHours(task.estimated_active_minutes)}</span><span>更新于 ${formatDate(task.updated_at)}</span>${session ? `<span class="working-meta">正在计时：${formatDate(session.started_at)} 开始</span>` : ''}${task.is_blocked ? '<span class="block-meta">需要处理依赖</span>' : ''}</div>
       ${task.is_blocked ? `<div class="block-actions"><button class="secondary-button small" data-action="unblock" data-block-id="${task.active_block_id}" data-block-version="${task.active_block_version}" type="button">解除阻塞</button></div>` : ''}
     </div>
     <div class="task-actions">
@@ -73,7 +84,7 @@ function openTaskDialog(task = null) {
   form.title.value = task?.title ?? '';
   form.notes.value = task?.notes ?? '';
   form.review_notes.value = task?.review_notes ?? '';
-  form.estimated_active_minutes.value = task?.estimated_active_minutes ?? '';
+  form.estimated_active_hours.value = task?.estimated_active_minutes == null ? '' : (task.estimated_active_minutes / 60).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
   byId('task-dialog').showModal();
 }
 
@@ -87,7 +98,7 @@ byId('task-form').addEventListener('submit', async (event) => {
     title: form.title.value,
     notes: form.notes.value || null,
     review_notes: form.review_notes.value || null,
-    estimated_active_minutes: form.estimated_active_minutes.value ? Number(form.estimated_active_minutes.value) : null,
+    estimated_active_minutes: parseEstimatedMinutes(form.estimated_active_hours.value),
     sort_order: state.editingTask?.sort_order ?? 0,
   };
   try {

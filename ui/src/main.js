@@ -8,6 +8,17 @@ function isTauri() { return Boolean(window.__TAURI_INTERNALS__); }
 function escapeHtml(value = '') { return value.replace(/[&<>'"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[c])); }
 function formatDate(value) { return value ? new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(new Date(value)) : ''; }
 function statusText(task) { return task.is_blocked ? '阻塞中' : task.status === 'in_progress' ? '进行中' : task.status === 'completed' ? '已完成' : '待处理'; }
+function formatEstimatedHours(minutes) {
+  if (minutes === null || minutes === undefined) return '未估时';
+  const hours = Number(minutes) / 60;
+  const display = Number.isInteger(hours) ? String(hours) : hours.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  return `预计 ${display} 小时`;
+}
+function parseEstimatedMinutes(hours) {
+  if (hours === '' || hours === null || hours === undefined) return null;
+  const value = Number(hours);
+  return Number.isFinite(value) && value >= 0 ? Math.round(value * 60) : null;
+}
 function visibleTasks() { return state.tasks.filter((task) => state.filter === 'active' ? task.status !== 'completed' : state.filter === 'blocked' ? task.is_blocked : state.filter === 'completed' ? task.status === 'completed' : true); }
 
 function navItem(filter, label, count) { return `<button class="nav-item ${state.filter === filter ? 'selected' : ''}" data-filter="${filter}" type="button"><span>${label}</span><b>${count}</b></button>`; }
@@ -18,7 +29,7 @@ function taskCard(task) {
     <button class="check-button ${done ? 'checked' : ''}" data-action="complete" data-id="${task.id}" data-version="${task.version}" aria-label="${done ? '已完成' : '完成任务'}" type="button">${done ? '✓' : ''}</button>
     <div class="task-main"><div class="task-title-row"><h3>${escapeHtml(task.title)}</h3><span class="status-pill ${task.is_blocked ? 'blocked' : task.status}">${statusText(task)}</span></div>
       ${task.notes ? `<p>${escapeHtml(task.notes)}</p>` : ''}
-      <div class="task-meta"><span>${task.estimated_active_minutes ? `预计 ${task.estimated_active_minutes} 分钟` : '未估时'}</span><span>更新于 ${formatDate(task.updated_at)}</span>${task.is_blocked ? '<span class="block-meta">需要处理依赖</span>' : ''}</div>
+      <div class="task-meta"><span>${formatEstimatedHours(task.estimated_active_minutes)}</span><span>更新于 ${formatDate(task.updated_at)}</span>${task.is_blocked ? '<span class="block-meta">需要处理依赖</span>' : ''}</div>
     </div>
     <div class="task-actions">${!done && !task.is_blocked ? `<button class="icon-button" data-action="work" data-id="${task.id}" title="开始工作" type="button">▶</button>` : ''}<button class="icon-button danger" data-action="delete" data-id="${task.id}" data-version="${task.version}" title="删除" type="button">⌫</button></div>
   </article>`;
@@ -35,7 +46,7 @@ function render() {
       <section class="focus-card"><div class="focus-copy"><span class="focus-kicker">今日焦点</span><h2>${activeCount ? `还有 ${activeCount} 个任务等待推进` : '今天的任务已经完成'}</h2><p>${blockedCount ? `${blockedCount} 个任务正在等待外部依赖。` : '保持节奏，完成一个，再开始下一个。'}</p></div><div class="focus-orbit"><strong>${completedCount}</strong><small>已完成</small></div></section>
       <section class="tasks-section"><div class="section-heading"><div><span class="eyebrow">TASKS</span><h2>任务列表</h2></div><button id="new-task" class="primary-button" type="button"><span>＋</span> 新建任务</button></div><div class="task-list">${tasks.length ? tasks.map(taskCard).join('') : emptyState()}</div></section>
     </section></main><div id="toast" class="toast" role="status"></div>
-    <dialog id="new-task-dialog"><form method="dialog" id="new-task-form" class="dialog-card"><button class="dialog-close" value="cancel" aria-label="关闭">×</button><span class="eyebrow">NEW TASK</span><h2>新建任务</h2><label>任务标题<input name="title" required maxlength="200" placeholder="例如：整理下周计划" autofocus /></label><label>备注<textarea name="notes" rows="3" placeholder="可选"></textarea></label><label>预计分钟数<input name="estimated" type="number" min="0" step="5" placeholder="可选" /></label><div class="dialog-actions"><button class="secondary-button" value="cancel">取消</button><button class="primary-button" value="default">创建任务</button></div></form></dialog>`;
+    <dialog id="new-task-dialog"><form method="dialog" id="new-task-form" class="dialog-card"><button class="dialog-close" value="cancel" aria-label="关闭">×</button><span class="eyebrow">NEW TASK</span><h2>新建任务</h2><label>任务标题<input name="title" required maxlength="200" placeholder="例如：整理下周计划" autofocus /></label><label>备注<textarea name="notes" rows="3" placeholder="可选"></textarea></label><label>预计小时数<input name="estimated" type="number" min="0" step="0.5" placeholder="例如 1.5" /></label><div class="dialog-actions"><button class="secondary-button" value="cancel">取消</button><button class="primary-button" value="default">创建任务</button></div></form></dialog>`;
   document.querySelectorAll('[data-filter]').forEach((button) => button.addEventListener('click', () => { state.filter = button.dataset.filter; render(); }));
   document.querySelector('#new-task')?.addEventListener('click', () => document.querySelector('#new-task-dialog').showModal());
   document.querySelector('#empty-new-task')?.addEventListener('click', () => document.querySelector('#new-task-dialog').showModal());
@@ -47,7 +58,7 @@ async function handleCreateTask(event) {
   event.preventDefault();
   const data = new FormData(event.currentTarget);
   try {
-    await call('create_task', { input: { title: data.get('title'), notes: data.get('notes') || null, estimatedActiveMinutes: data.get('estimated') ? Number(data.get('estimated')) : null } });
+    await call('create_task', { input: { title: data.get('title'), notes: data.get('notes') || null, estimatedActiveMinutes: parseEstimatedMinutes(data.get('estimated')) } });
     event.currentTarget.closest('dialog').close(); await loadTasks(); notify('任务已创建');
   } catch (error) { notify(error.message || '创建任务失败'); }
 }
