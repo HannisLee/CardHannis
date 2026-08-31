@@ -1,4 +1,4 @@
-const state = { tasks: [], filter: 'all', editingTask: null, activeSessionByTask: {} };
+const state = { tasks: [], filter: 'all', editingTask: null, blockingTaskId: null, activeSessionByTask: {} };
 const byId = (id) => document.getElementById(id);
 
 function formatDate(value) { return value ? new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(new Date(value)) : ''; }
@@ -67,8 +67,8 @@ function taskCard(task) {
       ${task.is_blocked ? `<div class="block-actions"><button class="secondary-button small" data-action="unblock" data-block-id="${task.active_block_id}" data-block-version="${task.active_block_version}" type="button">解除阻塞</button></div>` : ''}
     </div>
     <div class="task-actions">
-      ${!done ? (session ? `<button class="icon-button" data-action="stop-work" data-session-id="${session.id}" title="结束工作" type="button">■</button>` : `<button class="icon-button" data-action="start-work" data-id="${task.id}" title="开始工作" type="button">▶</button>`) : ''}
-      ${!done && !session ? `<button class="icon-button" data-action="block" data-id="${task.id}" title="标记阻塞" type="button">⏸</button>` : ''}
+      ${!done && !task.is_blocked ? (session ? `<button class="icon-button" data-action="stop-work" data-session-id="${session.id}" title="结束工作" type="button">■</button>` : `<button class="icon-button" data-action="start-work" data-id="${task.id}" title="开始工作" type="button">▶</button>`) : ''}
+      ${!done && !session && !task.is_blocked ? `<button class="icon-button" data-action="block" data-id="${task.id}" title="标记阻塞" type="button">⏸</button>` : ''}
       ${!done ? `<button class="icon-button" data-action="edit" data-id="${task.id}" title="编辑" type="button">✎</button>` : ''}
       <button class="icon-button danger" data-action="delete" data-id="${task.id}" title="删除" type="button">⌫</button>
     </div>
@@ -149,7 +149,7 @@ document.addEventListener('click', async (event) => {
       case 'delete': if (!window.confirm('确定删除这个任务吗？')) return; await api(`/api/tasks/${button.dataset.id}?expected_version=${task.version}`, { method: 'DELETE' }); notify('任务已删除'); break;
       case 'start-work': await api(`/api/tasks/${button.dataset.id}/sessions`, { method: 'POST', body: JSON.stringify({ note: null }) }); notify('已开始计时'); break;
       case 'stop-work': await api(`/api/sessions/${button.dataset.sessionId}/end`, { method: 'POST' }); notify('已结束本次工作'); break;
-      case 'block': { const reason = window.prompt('阻塞原因是什么？', ''); if (!reason?.trim()) return; await api(`/api/tasks/${button.dataset.id}/blocks`, { method: 'POST', body: JSON.stringify({ reason, note: null }) }); notify('已标记阻塞'); break; }
+      case 'block': openBlockDialog(button.dataset.id); return;
       case 'unblock': await api(`/api/blocks/${button.dataset.blockId}/end?expected_version=${button.dataset.blockVersion}`, { method: 'POST' }); notify('已解除阻塞'); break;
     }
     await loadTasks();
@@ -198,4 +198,28 @@ byId('sync-now').addEventListener('click', async () => {
   } catch (error) {
     showSettingsStatus(error.message, true);
   }
+});
+
+function openBlockDialog(taskId) {
+  state.blockingTaskId = taskId;
+  const task = state.tasks.find((item) => item.id === taskId);
+  const form = byId('block-form');
+  form.reason.value = '';
+  form.note.value = '';
+  byId('block-task-title').textContent = task ? task.title : '';
+  byId('block-dialog').showModal();
+}
+
+byId('block-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const reason = form.reason.value.trim();
+  if (!reason || !state.blockingTaskId) return;
+  try {
+    await api(`/api/tasks/${state.blockingTaskId}/blocks`, { method: 'POST', body: JSON.stringify({ reason, note: form.note.value.trim() || null }) });
+    byId('block-dialog').close();
+    state.blockingTaskId = null;
+    await loadTasks();
+    notify('已标记阻塞');
+  } catch (error) { notify(error.message, true); }
 });

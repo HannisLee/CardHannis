@@ -50,6 +50,18 @@
     </form>
   </dialog>
 
+  <dialog id="block-dialog">
+    <form method="dialog" id="block-form" class="dialog-card">
+      <button class="dialog-close" value="cancel" aria-label="关闭">×</button>
+      <span class="eyebrow">BLOCK TASK</span>
+      <h2>标记阻塞</h2>
+      <p class="block-task-hint" id="block-task-title"></p>
+      <label>阻塞原因<textarea name="reason" rows="2" required maxlength="300" placeholder="例如：等待接口文档" autofocus></textarea></label>
+      <label>补充备注<textarea name="note" rows="2" placeholder="可选"></textarea></label>
+      <div class="dialog-actions"><button class="secondary-button" value="cancel">取消</button><button class="primary-button" value="default">确认阻塞</button></div>
+    </form>
+  </dialog>
+
   <dialog id="settings-dialog">
     <form method="dialog" id="settings-form" class="dialog-card settings-card">
       <button class="dialog-close" value="cancel" aria-label="关闭">×</button>
@@ -63,6 +75,6 @@
       <div class="dialog-actions settings-actions"><button id="test-connection" class="secondary-button" type="button">测试连接</button><button id="sync-now" class="secondary-button" type="button">立即同步</button><button class="primary-button" value="default">保存设置</button></div>
     </form>
   </dialog>
-  <script type="module" src="/static/app.js?v=hours-sync"></script>
+  <script type="module" src="/static/app.js?v=block-dialog"></script>
 </body>
 </html>

@@ -36,3 +36,4 @@ dialog { border:0;padding:0;background:transparent; }dialog::backdrop { backgrou
 .settings-status { min-height: 18px; color: #a5533f; font-size: 11px; }
 .settings-status.success { color: #4e836b; }
 .settings-actions { flex-wrap: wrap; }
+.block-task-hint { overflow: hidden; color: #89918b; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }

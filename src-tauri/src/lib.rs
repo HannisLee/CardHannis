@@ -9,7 +9,7 @@ pub struct AppState {
 
 mod commands {
     use super::AppState;
-    use cardhannis_core::{CreateTaskCommand, Task, TaskBlock, WorkSession};
+    use cardhannis_core::{BlockTaskCommand, CreateTaskCommand, Task, TaskBlock, WorkSession};
     use tauri::State;
 
     fn service<'a>(
@@ -91,6 +91,29 @@ mod commands {
     }
 
     #[tauri::command]
+    pub fn block_task(
+        state: State<'_, AppState>,
+        task_id: String,
+        reason: String,
+        note: Option<String>,
+    ) -> Result<TaskBlock, String> {
+        service(&state)?
+            .block(&task_id, BlockTaskCommand { reason, note })
+            .map_err(error_message)
+    }
+
+    #[tauri::command]
+    pub fn unblock_task(
+        state: State<'_, AppState>,
+        block_id: String,
+        expected_version: i64,
+    ) -> Result<TaskBlock, String> {
+        service(&state)?
+            .unblock(&block_id, expected_version)
+            .map_err(error_message)
+    }
+
+    #[tauri::command]
     pub fn list_blocks(
         state: State<'_, AppState>,
         task_id: String,
@@ -125,7 +148,9 @@ pub fn run() {
             commands::delete_task,
             commands::start_work,
             commands::finish_work,
-            commands::list_blocks
+            commands::list_blocks,
+            commands::block_task,
+            commands::unblock_task
         ])
         .run(tauri::generate_context!())
         .expect("运行 CardHannis 时发生错误");
