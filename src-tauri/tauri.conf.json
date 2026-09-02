@@ -13,15 +13,23 @@
     "windows": [
       {
         "title": "CardHannis",
-        "width": 1120,
-        "height": 760,
-        "minWidth": 900,
-        "minHeight": 620,
+        "width": 280,
+        "height": 400,
+        "minWidth": 220,
+        "minHeight": 280,
         "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "alwaysOnTop": true,
+        "maximizable": false,
         "fullscreen": false
       }
     ],
-    "security": { "csp": null }
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,

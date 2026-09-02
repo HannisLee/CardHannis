@@ -15,7 +15,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 cardhannis-core = { path = "../core" }
 serde = { version = "1", features = ["derive"] }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["macos-private-api"] }
 
 [features]
 default = ["custom-protocol"]

@@ -127,9 +127,14 @@ mod commands {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir()?;
-            fs::create_dir_all(&app_data_dir)?;
-            let database_path = app_data_dir.join("cardhannis.sqlite3");
+            // 与 Web 原型共享同一数据库：~/Library/Application Support/CardHannis/
+            let data_dir = std::env::var_os("HOME")
+                .map(|home| {
+                    std::path::PathBuf::from(home).join("Library/Application Support/CardHannis")
+                })
+                .unwrap_or_else(|| app.path().app_data_dir().expect("无法定位应用数据目录"));
+            fs::create_dir_all(&data_dir)?;
+            let database_path = data_dir.join("cardhannis.sqlite3");
             let store = TaskStore::open(database_path).map_err(|error| error.to_string())?;
             let device_id = format!(
                 "macos-{}",
