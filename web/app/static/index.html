@@ -3,96 +3,110 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CardHannis · 工作区布局 Demo</title>
+<title>CardHannis · 便签工作台</title>
 <link rel="stylesheet" href="/static/style.css" />
 <style>
-  .demo-banner { display:flex;align-items:center;gap:10px;margin-top:18px;padding:10px 14px;border:1px dashed #cfd9cd;border-radius:10px;color:#7c8980;background:rgba(229,238,232,.45);font-size:11.5px; }
-  .demo-banner b { color:#4e836b; }
-  .demo-banner a { margin-left:auto;color:#4e836b;font-weight:700;font-size:11px; }
+  body { min-width: 0; }
+  .shell { display:block; }
+  .content { width: min(680px, 100%); margin: 0 auto; padding: 26px 22px 60px; }
 
-  /* ===== 工作区横向排列 ===== */
-  .workspace-rail { display:flex;align-items:stretch;gap:12px;margin-top:30px;overflow-x:auto;padding-bottom:4px; }
-  .workspace-tab { position:relative;display:grid;gap:4px;min-width:150px;padding:15px 34px 15px 16px;border:1px solid #e3ddd1;border-radius:14px;background:rgba(255,255,255,.55);text-align:left;transition:.16s; }
-  .workspace-tab:hover { border-color:#c9d6cb;transform:translateY(-1px);box-shadow:0 8px 22px rgba(62,78,68,.07); }
-  .workspace-tab.active { color:#f2f6f1;border-color:#31574a;background:linear-gradient(135deg,#3c6857,#2c5043);box-shadow:0 10px 26px rgba(49,92,78,.24); }
-  .workspace-tab .ws-eyebrow { font-family:ui-monospace,Menlo,monospace;font-size:9px;letter-spacing:.14em;color:#a5a49a; }
-  .workspace-tab.active .ws-eyebrow { color:#9db8a8; }
-  .workspace-tab .ws-name { font-size:15px;font-weight:750;letter-spacing:-.02em; }
-  .workspace-tab .ws-count { font-size:10.5px;color:#8b938a; } .workspace-tab.active .ws-count { color:#b7ccc0; }
-  .ws-close { position:absolute;top:9px;right:9px;display:none;width:19px;height:19px;border:0;border-radius:6px;color:#b7bdb3;background:transparent;font-size:12px;line-height:1; }
-  .workspace-tab:hover .ws-close { display:block; } .ws-close:hover { color:#b96c5e;background:rgba(185,108,94,.14); }
-  .workspace-tab.active .ws-close { color:#a9c3b4; } .workspace-tab.active:hover .ws-close { color:#f0c9bf;background:rgba(185,108,94,.25); }
-  .ws-add { display:grid;place-items:center;min-width:52px;border:1px dashed #cfd6cc;border-radius:14px;color:#79a18a;background:transparent;font-size:19px;transition:.16s; }
-  .ws-add:hover { color:#2f6654;border-color:#9dbfa9;background:#eef3ec; }
+  /* ===== 顶栏：小一号 ===== */
+  .note-topbar { display:flex;align-items:baseline;gap:10px; }
+  .note-topbar .brand-mark { display:inline-grid;place-items:center;width:22px;height:22px;border-radius:7px;color:#fff;background:#325c4e;font-size:11px;transform:translateY(3px); }
+  .note-topbar h1 { margin:0;font-size:18px;letter-spacing:-.04em; }
+  .note-topbar .today { margin-left:auto;color:#a6aba2;font-family:ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.08em; }
+  .demo-tip { display:flex;gap:8px;margin-top:10px;padding:7px 10px;border:1px dashed #d4dbd0;border-radius:8px;color:#8b958c;background:rgba(229,238,232,.35);font-size:10.5px; }
+  .demo-tip b { color:#4e836b; } .demo-tip a { margin-left:auto;color:#4e836b;font-weight:700;font-size:10px;white-space:nowrap; }
 
-  /* ===== 竖向可收起分级面板 ===== */
-  .group-stack { display:grid;gap:13px;margin-top:26px; }
-  .group-panel { border:1px solid #e7e1d7;border-radius:15px;background:rgba(255,255,255,.5);overflow:hidden;transition:border-color .16s; }
-  .group-panel.open { border-color:#dcdfd3;background:rgba(255,255,255,.62); }
+  /* ===== 工作区：小标签页 ===== */
+  .workspace-rail { display:flex;align-items:flex-end;gap:6px;margin-top:18px;border-bottom:2px solid #e4ddcf;padding-bottom:0;overflow-x:auto; }
+  .workspace-tab { position:relative;display:flex;align-items:center;gap:7px;border:1px solid #e0d9cb;border-bottom:0;border-radius:10px 10px 0 0;padding:7px 13px 8px;background:rgba(255,255,255,.5);transition:.15s; }
+  .workspace-tab:hover { background:#fbf9f3;transform:translateY(-1px); }
+  .workspace-tab.active { border-color:#cfd8cc;background:#fffdf6;box-shadow:0 -3px 10px rgba(62,78,68,.06); }
+  .workspace-tab .ws-name { font-size:12.5px;font-weight:750;letter-spacing:-.02em; }
+  .workspace-tab.active .ws-name { color:#2f5d4c; }
+  .workspace-tab .ws-count { font-size:9px;color:#a3a99f;font-family:ui-monospace,Menlo,monospace;white-space:nowrap; }
+  .ws-close { width:15px;height:15px;display:none;place-items:center;border:0;border-radius:5px;color:#b3b8ae;background:transparent;font-size:11px;line-height:1; }
+  .workspace-tab:hover .ws-close { display:grid; } .ws-close:hover { color:#b96c5e;background:#f6e5e0; }
+  .ws-add { border:1px dashed #cfd6cc !important;border-bottom:0 !important;border-radius:10px 10px 0 0;padding:6px 11px !important;color:#79a18a !important;background:transparent !important;font-size:13px !important; }
+  .ws-add:hover { color:#2f6654 !important;background:#eef3ec !important;transform:none; }
+
+  .workspace-strip { display:flex;align-items:center;justify-content:space-between;margin-top:16px; }
+  .workspace-strip h2 { margin:0;font-size:14px; } .workspace-strip .eyebrow { font-size:9px; }
+  #toggle-all,#add-prio { padding:7px 11px;font-size:11px;border-radius:8px; }
+
+  /* ===== 分级：紧凑折叠条 ===== */
+  .group-stack { display:grid;gap:9px;margin-top:12px; }
+  .group-panel { border:1px solid #e4ddcf;border-radius:11px;background:rgba(255,255,255,.45);overflow:hidden; }
+  .group-panel.open { background:rgba(255,255,255,.6); }
   .group-head { display:flex;align-items:stretch; }
-  .group-toggle { flex:1;min-width:0;display:flex;align-items:center;gap:11px;padding:15px 6px 15px 17px;border:0;background:transparent;text-align:left; }
+  .group-toggle { flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:9px 8px 9px 12px;border:0;background:transparent;text-align:left; }
   .group-toggle:hover { background:rgba(229,238,232,.4); }
-  .group-chevron { display:grid;place-items:center;width:22px;height:22px;border-radius:7px;color:#5f8574;background:#e9efe6;font-size:10px;transition:transform .22s ease; }
+  .group-chevron { display:grid;place-items:center;width:17px;height:17px;border-radius:5px;color:#5f8574;background:#e9efe6;font-size:8px;transition:transform .22s ease; }
   .group-panel:not(.open) .group-chevron { transform:rotate(-90deg); }
-  .group-title { font-size:14px;font-weight:750;letter-spacing:-.02em; }
-  .group-desc { color:#a6aba2;font-size:10.5px; }
-  .group-count { padding:3px 8px;border-radius:20px;color:#7d8a80;background:#eef0ea;font-size:10.5px;font-weight:700; }
-  .group-hint { margin-left:auto;color:#b3b6ae;font-size:10.5px;font-family:ui-monospace,Menlo,monospace;letter-spacing:.05em;white-space:nowrap; }
-  .group-accent { flex:none;width:8px;height:8px;border-radius:50%; }
-  .head-tools { display:flex;align-items:center;gap:3px;padding-right:12px; }
-  .head-btn { display:grid;place-items:center;width:26px;height:26px;border:1px solid transparent;border-radius:8px;color:#8b968d;background:transparent;font-size:12.5px;transition:.14s; }
-  .head-btn:hover { color:#2f6654;border-color:#d5e0d4;background:rgba(229,238,232,.65); }
-  .head-btn.add:hover { color:#3d735e;border-color:#c5dcc8;background:#e5f0e7; }
+  .group-title { font-size:12px;font-weight:800;letter-spacing:-.01em; }
+  .group-desc { display:none; }
+  .group-count { padding:2px 7px;border-radius:12px;color:#7d8a80;background:#eef0ea;font-size:9.5px;font-weight:700; }
+  .group-hint { margin-left:auto;color:#b3b6ae;font-family:ui-monospace,Menlo,monospace;font-size:9px;white-space:nowrap; }
+  .group-accent { flex:none;width:7px;height:7px;border-radius:50%; }
+  .head-tools { display:flex;align-items:center;gap:2px;padding-right:8px; }
+  .head-btn { display:grid;place-items:center;width:21px;height:21px;border:1px solid transparent;border-radius:6px;color:#98a299;background:transparent;font-size:11px;transition:.14s; }
+  .head-btn:hover { color:#2f6654;border-color:#d5e0d4;background:rgba(229,238,232,.7); }
   .head-btn.danger:hover { color:#b96c5e;border-color:#e8cdc5;background:#f9e8e4; }
   .group-body { display:grid;grid-template-rows:0fr;transition:grid-template-rows .26s ease; }
   .group-panel.open .group-body { grid-template-rows:1fr; }
   .group-inner { overflow:hidden;min-height:0; }
-  .group-tasks { display:grid;gap:10px;padding:2px 17px 17px; }
-  .group-empty { padding:2px 17px 18px;color:#b0b3ad;font-size:11.5px; }
+  .group-tasks { display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px 12px;padding:6px 14px 16px; }
+  .group-empty { padding:2px 14px 12px;color:#b0b3ad;font-size:10.5px; }
 
-  /* ===== 条目 ===== */
-  .task-row { align-items:center; }
-  .priority-chip { flex:0 0 auto;display:grid;place-items:center;min-width:37px;height:29px;padding:0 7px;border:1px solid;border-radius:9px;font-family:ui-monospace,Menlo,monospace;font-size:11px;font-weight:750;transition:.16s; }
-  .priority-chip:hover { filter:brightness(.94);transform:translateY(-1px); }
-  .task-row.done .task-main h3 { text-decoration:line-through;color:#9aa29b; }
+  /* ===== 便签条目 ===== */
+  .task-card.task-row.note { display:block;position:relative;margin-top:7px;min-height:118px;padding:11px 12px 9px;border:0;border-radius:3px;background:linear-gradient(160deg,var(--paper),#fffdf6 68%);box-shadow:2px 3px 9px rgba(88,80,60,.16),0 1px 2px rgba(88,80,60,.1);transform:rotate(var(--tilt));transition:transform .16s,box-shadow .16s; }
+  .task-card.task-row.note::before { content:'';position:absolute;top:-7px;left:50%;width:50px;height:15px;transform:translateX(-50%) rotate(-2deg);background:rgba(255,255,255,.55);border:1px solid rgba(180,175,155,.25);box-shadow:0 1px 2px rgba(88,80,60,.08); }
+  .task-row.note:hover { transform:rotate(0deg) translateY(-3px);box-shadow:3px 7px 16px rgba(88,80,60,.2);z-index:2; }
+  .task-row.note.blocked { border-left:0; }
+  .note-top { display:flex;align-items:center;justify-content:space-between;gap:6px; }
+  .priority-chip { display:grid;place-items:center;min-width:30px;height:21px;padding:0 6px;border:1px solid;border-radius:6px;font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:800;transition:.16s; }
+  .priority-chip:hover { transform:translateY(-1px);filter:brightness(.95); }
+  .status-pill { padding:2px 6px;font-size:8.5px;border-radius:5px; }
   .status-pill.waiting { color:#5c7699;background:#e9eff7; }
-  .act-button { display:inline-flex;align-items:center;gap:5px;height:27px;border:0;border-radius:7px;padding:0 9px;color:#819189;background:transparent;font-size:11px;font-weight:650;white-space:nowrap; }
-  .act-button:hover { color:#2f6654;background:#e8efe9; }
-  .act-button.done-act:hover { color:#3d735e;background:#e5f0e7; }
-  .act-button.danger:hover { color:#b96c5e;background:#f9e8e4; }
+  .note h3 { margin-top:8px;font-size:12.5px;line-height:1.45;letter-spacing:0;white-space:normal;word-break:break-word;font-weight:700;color:#3b3f38; }
+  .note.done h3 { text-decoration:line-through;color:#a2a89f; }
+  .note p { margin:5px 0 0;font-size:10px;line-height:1.5;white-space:normal;overflow:visible;text-overflow:clip;color:#8b8365; }
+  .note p.block-reason { color:#a45b38; } .note p.waiting-note { color:#66809f; }
+  .task-meta { display:flex;gap:8px;margin-top:7px;color:#b3ab8f;font-family:ui-monospace,Menlo,monospace;font-size:8px; }
+  .task-actions { display:flex;flex-wrap:wrap;gap:2px;margin:8px 0 0; }
+  .act-button { height:20px;padding:0 6px;gap:3px;border-radius:5px;font-size:9.5px;font-weight:700; }
+  .act-button.done-act { color:#4e836b; }
 
-  .workspace-strip { display:flex;align-items:center;justify-content:space-between;margin-top:34px; }
-  .workspace-strip h2 { margin-top:4px; }
-  .demo-foot { margin-top:46px;color:#b0b3ad;font-size:10.5px;font-family:ui-monospace,Menlo,monospace;letter-spacing:.05em; }
+  .demo-foot { margin-top:26px;text-align:center;color:#c2c4ba;font-size:9px;font-family:ui-monospace,Menlo,monospace;letter-spacing:.12em; }
+  dialog .dialog-card { width:340px;padding:22px; }
+  @media (max-width:520px){ .group-tasks { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
-<main class="shell" style="grid-template-columns:1fr;">
-  <section class="content" style="width:min(980px,100%);">
-    <header class="topbar">
-      <div><div class="eyebrow" id="today"></div><h1>工作区</h1></div>
-      <div class="topbar-actions"><button class="avatar" type="button" aria-label="用户">H</button></div>
-    </header>
-    <div class="demo-banner">🧪 <span><b>布局 Demo v5</b> · 分级可增删改名；新任务入口在每个分级旁；解除阻塞 → 等待中；mock 数据存于浏览器本地，尚未接后端。</span><a href="#" id="reset-link">重置演示数据</a></div>
+<main class="shell">
+  <section class="content">
+    <header class="note-topbar"><span class="brand-mark">C</span><h1>CardHannis 便签台</h1><span class="today" id="today"></span></header>
+    <div class="demo-tip">🗒️ <span><b>布局 Demo v6 · 便签模式</b> · 分级可增删改名，点便签左上角芯片换级；解除阻塞进入等待中；数据存本机浏览器，未接后端。</span><a href="#" id="reset-link">重置数据</a></div>
 
     <nav class="workspace-rail" id="workspace-rail" aria-label="工作区"></nav>
 
     <div class="workspace-strip">
       <div><span class="eyebrow">PRIORITIES</span><h2 id="ws-heading">日常</h2></div>
-      <div style="display:flex;gap:8px;align-items:center;">
+      <div style="display:flex;gap:6px;align-items:center;">
         <button class="secondary-button" id="toggle-all" type="button">全部收起</button>
         <button class="primary-button" id="add-prio" type="button">＋ 添加分级</button>
       </div>
     </div>
 
     <section class="group-stack" id="group-stack"></section>
-    <div class="demo-foot">CARDHANNIS WORKSPACE DEMO · V5 · 2026-09-02</div>
+    <div class="demo-foot">CARDHANNIS STICKY WORKSPACE · V6</div>
   </section>
 </main>
 <div id="toast" class="toast" role="status"></div>
 <dialog id="task-dialog">
   <form method="dialog" id="task-form" class="dialog-card">
-    <button class="dialog-close" value="cancel" aria-label="关闭" type="button">×</button>
+    <button class="dialog-close" data-close aria-label="关闭" type="button">×</button>
     <span class="eyebrow">NEW TASK</span><h2>新任务</h2>
     <label>标题<input name="title" required maxlength="120" placeholder="想做什么？" autofocus /></label>
     <label>预计投入（小时，可选）<input name="hours" type="number" min="0" step="0.5" placeholder="例如 2" /></label>
@@ -100,20 +114,20 @@
       <label>分级<select name="priority" id="prio-select"></select></label>
       <label>工作区<select name="workspace" id="ws-select"></select></label>
     </div>
-    <div class="dialog-actions"><button class="secondary-button" value="cancel" type="submit">取消</button><button class="primary-button" value="default" type="submit">添加</button></div>
+    <div class="dialog-actions"><button class="secondary-button" type="button" data-close>取消</button><button class="primary-button" value="default" type="submit">添加</button></div>
   </form>
 </dialog>
 <dialog id="block-dialog">
   <form method="dialog" id="block-form" class="dialog-card">
-    <button class="dialog-close" value="cancel" aria-label="关闭" type="button">×</button>
+    <button class="dialog-close" data-close aria-label="关闭" type="button">×</button>
     <span class="eyebrow">BLOCK TASK</span><h2>标记阻塞</h2>
     <p class="block-task-hint" id="block-task-title"></p>
     <label>阻塞原因<textarea name="reason" rows="2" required maxlength="300" placeholder="例如：等待接口文档"></textarea></label>
-    <div class="dialog-actions"><button class="secondary-button" value="cancel" type="submit">取消</button><button class="primary-button" value="default" type="submit">确认阻塞</button></div>
+    <div class="dialog-actions"><button class="secondary-button" type="button" data-close>取消</button><button class="primary-button" value="default" type="submit">确认阻塞</button></div>
   </form>
 </dialog>
 <script>
-const LS_KEY = "cardhannis.workspace-demo.v5";
+const LS_KEY = "cardha…ode2";
 const PRIO_PALETTE = ["#5c7699", "#7a5ea6", "#3d735e", "#a0632f", "#8a5a7a", "#4e7d8a"];
 const STATUSES = {
   in_progress: { label: "进行中", cls: "in_progress" },
@@ -128,10 +142,7 @@ const now = () => new Date().toISOString();
 function seed() {
   const t = (id, ws, prio, title, status, extra = {}) => ({ id, ws, priority: prio, title, status, hours: null, reason: null, updated: now(), ...extra });
   return {
-    workspaces: [
-      { id: "daily", name: "日常", builtin: true },
-      { id: "work",  name: "工作", builtin: true },
-    ],
+    workspaces: [ { id: "daily", name: "日常", builtin: true }, { id: "work", name: "工作", builtin: true } ],
     collapsed: { daily: {}, work: {} },
     activeWs: "daily",
     prios: [
@@ -146,16 +157,28 @@ function seed() {
       t("d4","daily","P2","整理书桌与相机器材","pending"),
       t("d5","daily","P2","读完《置身事内》最后两章","completed",{hours:3}),
       t("w1","work","P0","API 网关超时配置升级","blocked",{reason:"依赖平台组发布窗口"}),
-      t("w2","work","P0","CardHannis：WebUI 工作区改版","in_progress",{hours:4}),
+      t("w2","work","P0","CardHannis：便签 GUI 打磨","in_progress",{hours:4}),
       t("w3","work","P1","周会材料：Q3 里程碑对齐","pending",{hours:2}),
       t("w4","work","P1","评审同事的同步模块 PR","pending"),
       t("w5","work","P2","报销 8 月差旅","completed"),
     ],
   };
 }
-function load() { try { const raw = localStorage.getItem(LS_KEY); if (raw) { const v = JSON.parse(raw); if (v.prios && v.workspaces && v.tasks) return v; } } catch {} return seed(); }
+const LEGACY_KEY = "cardha…o.v5";
+function load() {
+  try {
+    const raw = localStorage.getItem(LS_KEY) || localStorage.getItem(LEGACY_KEY);
+    if (raw) { const v = JSON.parse(raw); if (v.prios && v.workspaces && v.tasks) return v; }
+  } catch {}
+  return seed();
+}
 function save() { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
 let state = load();
+if (!state.notesVersion) {
+  state.notesVersion = 1;
+  state.tasks.forEach((task, i) => { task.tilt = [ -0.8, 0.5, -0.4, 0.9, 0.2 ][i % 5]; });
+  save();
+}
 
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -171,13 +194,13 @@ function renderRail() {
     const open = tasks.filter((t) => t.status !== "completed").length;
     const blocked = tasks.filter((t) => t.status === "blocked").length;
     const waiting = tasks.filter((t) => t.status === "waiting").length;
+    const extra = [blocked ? `${blocked}⏸` : "", waiting ? `${waiting}💤` : ""].filter(Boolean).join(" ");
     return `<button class="workspace-tab ${ws.id === state.activeWs ? "active" : ""}" data-ws="${ws.id}" type="button">
-      <span class="ws-eyebrow">WORKSPACE</span>
       <span class="ws-name">${escapeHtml(ws.name)}</span>
-      <span class="ws-count">${open} 项未完成${blocked ? ` · ${blocked} 阻塞` : ""}${waiting ? ` · ${waiting} 等待` : ""}</span>
+      <span class="ws-count">${open}${extra ? ` · ${extra}` : ""}</span>
       ${ws.builtin ? "" : `<span class="ws-close" data-del="${ws.id}" title="删除工作区">×</span>`}
     </button>`;
-  }).join("") + `<button class="ws-add" id="ws-add" type="button" title="新建工作区">＋</button>`;
+  }).join("") + `<button class="ws-add workspace-tab" id="ws-add" type="button" title="新建工作区">＋</button>`;
 }
 
 function renderGroups() {
@@ -191,19 +214,18 @@ function renderGroups() {
     const open = !(state.collapsed[state.activeWs] || {})[g.key];
     const blocked = tasks.filter((t) => t.status === "blocked").length;
     const waiting = tasks.filter((t) => t.status === "waiting").length;
-    const hints = []; if (blocked) hints.push(`⏸ ${blocked}`); if (waiting) hints.push(`💤 ${waiting}`);
+    const hints = []; if (blocked) hints.push(`⏸${blocked}`); if (waiting) hints.push(`💤${waiting}`);
     return `<section class="group-panel ${open ? "open" : ""}" data-group="${g.key}">
       <div class="group-head">
         <button class="group-toggle" type="button" data-toggle="${g.key}" aria-expanded="${open}">
           <span class="group-accent" style="background:${g.color}"></span>
           <span class="group-chevron">▼</span>
           <span class="group-title">${escapeHtml(g.label)}</span>
-          ${g.desc ? `<span class="group-desc">${escapeHtml(g.desc)}</span>` : ""}
           <span class="group-count">${tasks.length}</span>
           <span class="group-hint">${open ? hints.join(" ") : "已收起"}</span>
         </button>
         <div class="head-tools">
-          <button class="head-btn add" data-gact="grp-add" data-prio="${g.key}" title="在「${escapeHtml(g.label)}」新任务" type="button">＋</button>
+          <button class="head-btn" data-gact="grp-add" data-prio="${g.key}" title="在「${escapeHtml(g.label)}」新任务" type="button">＋</button>
           <button class="head-btn" data-gact="grp-rename" data-prio="${g.key}" title="重命名分级" type="button">✎</button>
           <button class="head-btn danger" data-gact="grp-del" data-prio="${g.key}" title="删除分级（仅限空分级）" type="button">✕</button>
         </div>
@@ -219,21 +241,22 @@ function card(task) {
   const st = STATUSES[task.status];
   const prio = prioOf(task.priority);
   const blocked = task.status === "blocked";
-  return `<article class="task-card task-row ${task.status === "completed" ? "done" : ""} ${blocked ? "blocked" : ""}">
-    <button class="priority-chip" style="${chipStyle(prio)}" data-act="cycle" data-id="${task.id}" title="点击轮换分级" type="button">${escapeHtml(prio.label)}</button>
-    <div class="task-main">
-      <div class="task-title-row"><h3>${escapeHtml(task.title)}</h3><span class="status-pill ${st.cls}">${st.label}</span></div>
-      ${blocked && task.reason ? `<p>⏸ ${escapeHtml(task.reason)}</p>` : ""}
-      ${task.status === "waiting" ? `<p class="waiting-note">💤 等待中 · 未到开工时机</p>` : ""}
-      <div class="task-meta"><span>${task.hours ? `≈ ${task.hours}h` : "未估时"}</span><span>更新 ${fmtTime(task.updated)}</span></div>
+  return `<article class="task-card task-row note ${task.status === "completed" ? "done" : ""} ${blocked ? "blocked" : ""}" style="--paper:${prio.color}1f;--tilt:${task.tilt ?? 0}deg">
+    <div class="note-top">
+      <button class="priority-chip" style="${chipStyle(prio)}" data-act="cycle" data-id="${task.id}" title="点击轮换分级" type="button">${escapeHtml(prio.label)}</button>
+      <span class="status-pill ${st.cls}">${st.label}</span>
     </div>
+    <h3>${escapeHtml(task.title)}</h3>
+    ${blocked && task.reason ? `<p class="block-reason">⏸ ${escapeHtml(task.reason)}</p>` : ""}
+    ${task.status === "waiting" ? `<p class="waiting-note">💤 等待中 · 未到开工时机</p>` : ""}
+    <div class="task-meta"><span>${task.hours ? `≈${task.hours}h` : "未估时"}</span><span>${fmtTime(task.updated)}</span></div>
     <div class="task-actions">
-      ${task.status === "pending" || task.status === "waiting" ? `<button class="act-button" data-act="start" data-id="${task.id}" type="button">▶ 开始</button>` : ""}
-      ${task.status === "waiting" ? `<button class="act-button" data-act="unwait" data-id="${task.id}" type="button">↩ 待处理</button>` : ""}
-      ${task.status === "in_progress" ? `<button class="act-button" data-act="pause" data-id="${task.id}" type="button">⏯ 暂停</button>` : ""}
-      ${task.status !== "completed" && !blocked ? `<button class="act-button" data-act="block" data-id="${task.id}" type="button">⏸ 阻塞</button>` : ""}
-      ${blocked ? `<button class="act-button" data-act="unblock" data-id="${task.id}" title="解除阻塞，进入等待中" type="button">▶ 解除阻塞</button>` : ""}
-      ${task.status !== "completed" ? `<button class="act-button done-act" data-act="toggle-done" data-id="${task.id}" type="button">✓ 完成</button>` : `<button class="act-button" data-act="toggle-done" data-id="${task.id}" type="button">↺ 重新打开</button>`}
+      ${task.status === "pending" || task.status === "waiting" ? `<button class="act-button" data-act="start" data-id="${task.id}" title="开始" type="button">▶</button>` : ""}
+      ${task.status === "waiting" ? `<button class="act-button" data-act="unwait" data-id="${task.id}" title="退回待处理" type="button">↩</button>` : ""}
+      ${task.status === "in_progress" ? `<button class="act-button" data-act="pause" data-id="${task.id}" title="暂停回待处理" type="button">⏯</button>` : ""}
+      ${task.status !== "completed" && !blocked ? `<button class="act-button" data-act="block" data-id="${task.id}" title="标记阻塞" type="button">⏸</button>` : ""}
+      ${blocked ? `<button class="act-button" data-act="unblock" data-id="${task.id}" title="解除阻塞，进入等待中" type="button">▶⏏</button>` : ""}
+      ${task.status !== "completed" ? `<button class="act-button done-act" data-act="toggle-done" data-id="${task.id}" title="完成" type="button">✓</button>` : `<button class="act-button" data-act="toggle-done" data-id="${task.id}" title="重新打开" type="button">↺</button>`}
       <button class="act-button danger" data-act="delete" data-id="${task.id}" title="删除任务" type="button">⌫</button>
     </div>
   </article>`;
@@ -241,8 +264,8 @@ function card(task) {
 
 function render() { renderRail(); renderGroups(); }
 
-/* ===== 工作区交互 ===== */
-$("today").textContent = new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
+$("today").textContent = new Date().toLocaleDateString("zh-CN", { month: "long", day: "numeric", weekday: "short" });
+
 $("workspace-rail").addEventListener("click", (e) => {
   const del = e.target.closest("[data-del]");
   if (del) {
@@ -266,7 +289,6 @@ $("workspace-rail").addEventListener("click", (e) => {
   if (tab) { state.activeWs = tab.dataset.ws; save(); render(); }
 });
 
-/* ===== 分级管理：添加 / 重命名 / 删除 / 组头新任务 ===== */
 $("add-prio").addEventListener("click", () => {
   const name = prompt("新分级名称（如：P3 / 紧急 / 长期）");
   const label = name && name.trim(); if (!label) return;
@@ -330,7 +352,6 @@ $("toggle-all").addEventListener("click", () => {
   save(); renderGroups();
 });
 
-/* ===== 任务 / 阻塞对话框 ===== */
 let blockingId = null;
 function openBlock(id) {
   const task = state.tasks.find((t) => t.id === id); if (!task) return;
@@ -339,7 +360,7 @@ function openBlock(id) {
 }
 $("block-form").addEventListener("submit", (e) => {
   if (e.submitter && e.submitter.value === "cancel") return;
-  const reason = $("block-form").reason.value.trim(); if (!reason || !blockingId) return;
+  const reason = $("block-form").elements.reason.value.trim(); if (!reason || !blockingId) return;
   const task = state.tasks.find((t) => t.id === blockingId);
   task.status = "blocked"; task.reason = reason; task.updated = now();
   blockingId = null; save(); render(); notify("已标记阻塞");
@@ -353,13 +374,15 @@ function openTaskDialog(prioKey) {
 }
 $("task-form").addEventListener("submit", (e) => {
   if (e.submitter && e.submitter.value === "cancel") return;
-  const f = $("task-form"); const title = f.title.value.trim(); if (!title) return;
-  state.tasks.unshift({ id: "t" + Date.now().toString(36), ws: f.workspace.value, priority: f.priority.value, title, status: "pending", hours: f.hours.value ? Number(f.hours.value) : null, reason: null, updated: now() });
-  state.collapsed[f.workspace.value] = state.collapsed[f.workspace.value] || {};
-  state.collapsed[f.workspace.value][f.priority.value] = false;
-  if (f.workspace.value !== state.activeWs) state.activeWs = f.workspace.value;
+  const f = $("task-form"); const title = f.elements.title.value.trim(); if (!title) return;
+  state.tasks.unshift({ id: "t" + Date.now().toString(36), ws: f.elements.workspace.value, priority: f.elements.priority.value, title, status: "pending", hours: f.elements.hours.value ? Number(f.elements.hours.value) : null, reason: null, updated: now(), tilt: [ -0.6, 0.4, -0.9, 0.7 ][state.tasks.length % 4] });
+  state.collapsed[f.elements.workspace.value] = state.collapsed[f.elements.workspace.value] || {};
+  state.collapsed[f.elements.workspace.value][f.priority.value] = false;
+  if (f.elements.workspace.value !== state.activeWs) state.activeWs = f.workspace.value;
   save(); render(); notify("已添加任务");
 });
+
+document.addEventListener("click", (e) => { const c = e.target.closest("[data-close]"); if (c) { const d = c.closest("dialog"); if (d) d.close(); } });
 
 $("reset-link").addEventListener("click", (e) => { e.preventDefault(); if (confirm("恢复初始演示数据？")) { state = seed(); save(); render(); notify("演示数据已重置"); } });
 
