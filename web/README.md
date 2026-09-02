@@ -18,6 +18,8 @@ python3 -m uvicorn app.main:app --reload --port 8321
 http://127.0.0.1:8321
 ```
 
+当前首页是工作区布局 Demo（`app/static/index.html`）：工作区横向排列、分级竖向可收起、状态与操作内联到条目。数据为浏览器 localStorage mock，尚未连接 `/api/*`；原任务列表页与其 `app.js` 已删除。
+
 API 文档：
 
 ```text
@@ -35,8 +37,8 @@ http://127.0.0.1:8321/docs
 ## Supabase 同步
 
 1. 在 Supabase SQL Editor 执行仓库根目录的 `supabase-schema.sql`。
-2. 启动 WebUI 后打开右上角「设置」，填写 Supabase Project URL 和 publishable/anon key。
-3. 保存并测试连接，然后点击「立即同步」。
+2. 设置界面目前随旧首页退役临时下线（`/api/settings/supabase*`、`/api/sync` 后端接口仍可用），后续会迁回新版布局页。
+3. 恢复入口后可填写 Project URL 和 publishable/anon key，保存并测试连接，再点击「立即同步」。
 
 WebUI 会把本地 SQLite 与 Supabase 的 `tasks`、`task_blocks`、`work_sessions` 三张表按 `updated_at` 合并。配置保存在本机应用数据目录的 `supabase.json`，不会提交到仓库。
 

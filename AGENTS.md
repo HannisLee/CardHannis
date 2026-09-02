@@ -88,6 +88,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 默认数据库为 `~/Library/Application Support/CardHannis/cardhannis.sqlite3`；可按 `web/README.md` 约定支持/实现 `CARDHANNIS_DB` 时同步更新文档和代码（当前代码以固定默认路径初始化）。
 - Web API 的请求模型通常将 `expected_version` 放在 JSON body（更新）或 query 参数（状态变更/删除/解除阻塞）；新增路由应保持现有 REST 风格和错误映射。
 - `web/app/static/` 是 Web 原型独立静态 UI；它与 `ui/src/` 不是同一套构建入口，修改一端不会自动同步另一端。
+- Web 首页（`web/app/static/index.html`）当前为工作区布局 Demo：mock 数据存于浏览器 localStorage，未调用 `/api/*`；原表单式 WebUI（旧 `index.html` + `app.js`）已删除，Supabase 设置界面待迁回新版布局。
 
 ## 领域不变量
 
@@ -117,7 +118,7 @@ cargo check --workspace
 
 # 前端依赖和构建
 npm install
-npm run ui:dev       # Vite，默认 http://127.0.0.1:5173（Tauri 开发时由配置使用 1420）
+npm run ui:dev       # Vite，固定 http://127.0.0.1:1420（ui/vite.config.js 中与 Tauri devUrl 一致）
 npm run ui:build
 
 # Tauri 桌面开发/打包
