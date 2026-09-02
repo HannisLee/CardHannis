@@ -71,10 +71,11 @@ class TaskStore:
         for row in rows:
             task = dict(row)
             if task["is_blocked"]:
-                block = self._fetchone("SELECT id, version FROM task_blocks WHERE task_id = ?1 AND ended_at IS NULL AND deleted_at IS NULL ORDER BY started_at DESC LIMIT 1", (task["id"],))
+                block = self._fetchone("SELECT id, version, reason FROM task_blocks WHERE task_id = ?1 AND ended_at IS NULL AND deleted_at IS NULL ORDER BY started_at DESC LIMIT 1", (task["id"],))
                 if block:
                     task["active_block_id"] = block["id"]
                     task["active_block_version"] = block["version"]
+                    task["active_block_reason"] = block["reason"]
             tasks.append(task)
         return tasks
 
@@ -82,10 +83,11 @@ class TaskStore:
         row = self._fetchone(f"SELECT {TASK_COLUMNS} FROM tasks t WHERE t.id = ?1", (task_id,))
         task = dict(row) if row else None
         if task is not None and task["is_blocked"]:
-            block = self._fetchone("SELECT id, version FROM task_blocks WHERE task_id = ?1 AND ended_at IS NULL AND deleted_at IS NULL ORDER BY started_at DESC LIMIT 1", (task_id,))
+            block = self._fetchone("SELECT id, version, reason FROM task_blocks WHERE task_id = ?1 AND ended_at IS NULL AND deleted_at IS NULL ORDER BY started_at DESC LIMIT 1", (task_id,))
             if block:
                 task["active_block_id"] = block["id"]
                 task["active_block_version"] = block["version"]
+                task["active_block_reason"] = block["reason"]
         return task
 
     def update_task(self, task_id: str, input: TaskUpdate, updated_at: str) -> dict[str, Any]:

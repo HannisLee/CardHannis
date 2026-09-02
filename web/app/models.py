@@ -44,6 +44,9 @@ class Task(TaskBase):
     deleted_at: Optional[str] = None
     version: int
     is_blocked: bool
+    active_block_id: Optional[str] = None
+    active_block_version: Optional[int] = None
+    active_block_reason: Optional[str] = None
 
 
 class BlockCreate(BaseModel):
