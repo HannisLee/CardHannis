@@ -31,7 +31,7 @@ h2, h3, p { margin: 0; }
 .row:hover { background: rgba(60, 104, 87, .08); }
 .rt { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; font-weight: 650; color: #3c413a; letter-spacing: .01em; }
 .row.done .rt { text-decoration: line-through; color: #a3a596; font-weight: 400; }
-.ra { display: flex; gap: 1px; flex: none; }
+.ra { display: flex; gap: 1px; flex: none; width: 78px; justify-content: flex-end; }
 .pill { flex: none; padding: 1.5px 8px; border-radius: 999px; font-size: 8px; font-weight: 700; letter-spacing: .05em; color: #96988e; background: rgba(150, 150, 132, .14); }
 .pill.in_progress { color: #7d9d8b; background: #e6efe7; }
 .pill.blocked { color: #ad8a72; background: #f2e6da; }

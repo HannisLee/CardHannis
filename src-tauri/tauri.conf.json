@@ -13,9 +13,9 @@
     "windows": [
       {
         "title": "CardHannis",
-        "width": 280,
+        "width": 350,
         "height": 400,
-        "minWidth": 220,
+        "minWidth": 320,
         "minHeight": 280,
         "resizable": true,
         "decorations": false,

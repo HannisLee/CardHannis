@@ -11,7 +11,7 @@ TASK_COLUMNS = (
     "id,title,notes,review_notes,estimated_active_minutes,created_at,started_at,completed_at,status,"
     "sort_order,created_device_id,updated_at,deleted_at,version,"
     "EXISTS (SELECT 1 FROM task_blocks b WHERE b.task_id = t.id AND b.ended_at IS NULL AND b.deleted_at IS NULL) AS is_blocked,"
-    "workspace_id,priority_id"
+    "workspace_id,priority_id,home_workspace_id"
 )
 
 BLOCK_COLUMNS = "id,task_id,started_at,ended_at,reason,note,created_at,updated_at,version,deleted_at"
@@ -69,8 +69,8 @@ class TaskStore:
         task_id = new_id()
         self._execute(
             """
-            INSERT INTO tasks (id, title, notes, review_notes, estimated_active_minutes, sort_order, created_device_id, created_at, updated_at, version, workspace_id, priority_id)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 1, ?9, ?10)
+            INSERT INTO tasks (id, title, notes, review_notes, estimated_active_minutes, sort_order, created_device_id, created_at, updated_at, version, workspace_id, priority_id, home_workspace_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 1, ?9, ?10, ?9)
             """,
             (
                 task_id, input.title.strip(), input.notes, input.review_notes,
@@ -145,8 +145,8 @@ class TaskStore:
         else:
             started_at = None
         self._execute(
-            "UPDATE tasks SET status = ?1, started_at = ?2, completed_at = ?3, updated_at = ?4, version = version + 1 WHERE id = ?5 AND version = ?6 AND deleted_at IS NULL",
-            (status, started_at, completed_at, updated_at, task_id, expected_version),
+            "UPDATE tasks SET status = ?1, started_at = ?2, completed_at = ?3, updated_at = ?4, workspace_id = ?7, version = version + 1 WHERE id = ?5 AND version = ?6 AND deleted_at IS NULL",
+            (status, started_at, completed_at, updated_at, task_id, expected_version, "done" if status == "completed" else task["workspace_id"]),
         )
         return self.get_task(task_id) or {}
 
@@ -236,8 +236,8 @@ class TaskStore:
         if task["status"] != "completed":
             raise StoreError("只有已完成任务可以重新打开")
         self._execute(
-            "UPDATE tasks SET status = 'pending', completed_at = NULL, updated_at = ?1, version = version + 1 WHERE id = ?2 AND version = ?3 AND deleted_at IS NULL",
-            (updated_at, task_id, expected_version),
+            "UPDATE tasks SET status = 'pending', completed_at = NULL, workspace_id = COALESCE(?4, 'daily'), updated_at = ?1, version = version + 1 WHERE id = ?2 AND version = ?3 AND deleted_at IS NULL",
+            (updated_at, task_id, expected_version, task["home_workspace_id"]),
         )
         return self.get_task(task_id) or {}
 

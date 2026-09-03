@@ -3,7 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import './style.css';
 
 const app = document.querySelector('#app');
-const state = { tasks: [], blocksByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null };
+const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null };
 const COLLAPSE_KEY = 'cardha…e.v2';
 let collapsed = {};
 try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch {}
@@ -36,15 +36,27 @@ function row(task) {
   const block = state.blocksByTask[task.id];
   const pill = pillInfo(task);
   const tip = escapeHtml([task.title, task.is_blocked && block && block.reason ? `阻塞：${block.reason}` : '', task.notes || '', task.estimated_active_minutes != null ? formatEstimatedHours(task.estimated_active_minutes) : ''].filter(Boolean).join(' ｜ '));
+  const d = `data-id="${task.id}"`;
+  const v = `data-version="${task.version}"`;
+  let actions = '';
+  if (done) {
+    actions = `<button class="nb" data-action="reopen" ${d} ${v} title="重新打开" type="button">↺</button>`;
+  } else if (task.is_blocked) {
+    actions = `${block ? `<button class="nb" data-action="unblock" data-block-id="${block.id}" data-block-version="${block.version}" title="解除阻塞 → 等待中" type="button">▶⏏</button>` : ''}
+      <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
+  } else if (task.status === 'in_progress') {
+    actions = `<button class="nb" data-action="pause" ${d} ${v} title="暂停（回到待办）" type="button">⏯</button>
+      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">⏸</button>
+      <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
+  } else {
+    actions = `<button class="nb" data-action="work" ${d} title="开始工作（计时）" type="button">▶</button>
+      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">⏸</button>
+      <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
+  }
   return `<div class="row ${done ? 'done' : ''}" data-id="${task.id}" data-version="${task.version}" title="${tip}">
     <span class="rt">${escapeHtml(task.title)}</span>
     <span class="pill ${pill.cls}">${pill.label}</span>
-    <span class="ra">
-      ${(task.status === 'pending' || task.status === 'waiting') && !task.is_blocked ? `<button class="nb" data-action="work" data-id="${task.id}" title="开始工作（计时）" type="button">▶</button>` : ''}
-      ${!done && !task.is_blocked ? `<button class="nb" data-action="block" data-id="${task.id}" title="标记阻塞" type="button">⏸</button>` : ''}
-      ${task.is_blocked && block ? `<button class="nb" data-action="unblock" data-block-id="${block.id}" data-block-version="${block.version}" title="解除阻塞 → 等待中" type="button">▶⏏</button>` : ''}
-      ${!done ? `<button class="nb ok" data-action="complete" data-id="${task.id}" data-version="${task.version}" title="完成任务" type="button">✓</button>` : `<button class="nb" data-action="reopen" data-id="${task.id}" data-version="${task.version}" title="重新打开" type="button">↺</button>`}
-    </span>
+    <span class="ra">${actions}</span>
   </div>`;
 }
 
@@ -52,6 +64,8 @@ function render() {
   const ws = state.workspaces.find((w) => w.id === state.activeWs) || state.workspaces[0];
   if (ws) state.activeWs = ws.id;
   const wsTasks = state.tasks.filter((t) => t.workspace_id === (ws ? ws.id : null));
+  const isDoneWs = ws ? ws.id === 'done' : false;
+  const doneRows = isDoneWs ? [...wsTasks].sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || '')) : [];
   const groups = state.prios.map((p, i) => ({ p, color: prioColor(p, i), tasks: wsTasks.filter((t) => t.priority_id === p.id) }));
   const unsorted = wsTasks.filter((t) => !state.prios.some((p) => p.id === t.priority_id));
   app.innerHTML = `<div class="win"><div class="win-sheet">
@@ -66,14 +80,14 @@ function render() {
     </header>
     <nav class="ws-row">
       <div class="ws-tabs">${state.workspaces.map((w) => {
-        const open = state.tasks.filter((t) => t.workspace_id === w.id && t.status !== 'completed').length;
+        const open = w.id === 'done' ? state.tasks.filter((t) => t.workspace_id === w.id).length : state.tasks.filter((t) => t.workspace_id === w.id && t.status !== 'completed').length;
         return `<button class="ws-tab ${w.id === state.activeWs ? 'active' : ''}" data-ws="${w.id}" type="button">${escapeHtml(w.name)}<b>${open}</b>${w.builtin ? '' : `<span class="ws-x" data-ws-del="${w.id}" data-version="${w.version}" title="删除工作区">×</span>`}</button>`;
       }).join('')}<button class="ws-tool" id="ws-add" title="新建工作区" type="button">＋</button></div>
       <button class="ws-tool" id="collapse-all" title="全部收起/展开" type="button">▤</button>
       <button class="ws-tool" id="add-prio" title="添加分级" type="button">＋P</button>
     </nav>
     <div class="win-body">
-      ${[...groups, unsorted.length ? { p: { id: 'none', name: '未分级' }, color: '#a8a89a', tasks: unsorted } : null].filter(Boolean).map(({ p, color, tasks }) => {
+      ${isDoneWs ? (doneRows.length ? `<div class="rows">${doneRows.map((t) => row(t)).join('')}</div>` : '<div class="empty-hint">还没有完成的任务</div>') : [...groups, unsorted.length ? { p: { id: 'none', name: '未分级' }, color: '#a8a89a', tasks: unsorted } : null].filter(Boolean).map(({ p, color, tasks }) => {
         const key = `${state.activeWs}:${p.id}`;
         const closed = collapsed[key];
         return `<section class="sec ${closed ? 'collapsed' : ''}" data-prio="${p.id}">
@@ -249,6 +263,12 @@ async function handleAction(button) {
     if (action === 'complete') { await call('complete_task', { id, expectedVersion: version }); notify('任务完成 ✦'); }
     if (action === 'reopen') { await call('reopen_task', { id, expectedVersion: version }); notify('任务已重新打开'); }
     if (action === 'work') { await call('start_work', { taskId: id }); notify('开始计时 ▶'); }
+    if (action === 'pause') {
+      const session = state.sessionsByTask[id];
+      if (session) { try { await call('finish_work', { sessionId: session.id }); } catch {} }
+      await call('pause_task', { id, expectedVersion: version });
+      notify('已暂停，回到待办');
+    }
     if (action === 'block') { openBlockDialog(id); return; }
     if (action === 'unblock') { await call('unblock_task', { blockId: button.dataset.blockId, expectedVersion: Number(button.dataset.blockVersion) }); notify('已解除阻塞，进入等待中'); }
     await loadTasks();
@@ -298,14 +318,17 @@ async function previewCommand(command, args) {
     state.prios = state.prios.filter((p) => p.id !== args.id);
   }
   if (command === 'create_task') {
-    const task = { id: crypto.randomUUID(), title: args.input.title, notes: args.input.notes, estimated_active_minutes: args.input.estimatedActiveMinutes, status: 'pending', sort_order: 0, updated_at: new Date().toISOString(), version: 1, is_blocked: false, workspace_id: args.input.workspaceId, priority_id: args.input.priorityId };
+    const task = { id: crypto.randomUUID(), title: args.input.title, notes: args.input.notes, estimated_active_minutes: args.input.estimatedActiveMinutes, status: 'pending', sort_order: 0, updated_at: new Date().toISOString(), version: 1, is_blocked: false, workspace_id: args.input.workspaceId, priority_id: args.input.priorityId, home_workspace_id: args.input.workspaceId };
     state.tasks.unshift(task);
     return task;
   }
-  if (command === 'complete_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { task.status = 'completed'; task.version += 1; task.updated_at = new Date().toISOString(); } }
-  if (command === 'reopen_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { task.status = 'pending'; task.completed_at = null; task.version += 1; } }
+  if (command === 'complete_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { task.status = 'completed'; task.completed_at = new Date().toISOString(); task.version += 1; task.updated_at = task.completed_at; task.workspace_id = 'done'; } }
+  if (command === 'reopen_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { task.status = 'pending'; task.completed_at = null; task.version += 1; task.workspace_id = task.home_workspace_id || 'daily'; } }
+  if (command === 'pause_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { task.status = 'pending'; task.version += 1; task.updated_at = new Date().toISOString(); } }
+  if (command === 'finish_work') { for (const task of state.tasks) { if (task.activeSession?.id === args.sessionId) delete task.activeSession; } }
+  if (command === 'list_sessions') { const task = state.tasks.find((item) => item.id === args.taskId); return task?.activeSession ? [task.activeSession] : []; }
   if (command === 'delete_task') state.tasks = state.tasks.filter((item) => item.id !== args.id);
-  if (command === 'start_work') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.status = 'in_progress'; task.version += 1; } }
+  if (command === 'start_work') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.status = 'in_progress'; task.version += 1; task.activeSession = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null }; } }
   if (command === 'list_blocks') { const task = state.tasks.find((item) => item.id === args.taskId); return task?.activeBlock ? [task.activeBlock] : []; }
   if (command === 'block_task') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.is_blocked = true; task.activeBlock = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null, reason: args.reason, note: args.note ?? null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, deleted_at: null }; } }
   if (command === 'unblock_task') { for (const task of state.tasks) { if (task.activeBlock?.id === args.blockId) { task.is_blocked = false; delete task.activeBlock; task.status = 'waiting'; task.version += 1; } } }
@@ -314,6 +337,7 @@ function seedPreviewMeta() {
   state.workspaces = [
     { id: 'daily', name: '日常', sort_order: 0, builtin: true, version: 1 },
     { id: 'work', name: '工作', sort_order: 1, builtin: true, version: 1 },
+    { id: 'done', name: '已完成', sort_order: 99, builtin: true, version: 1 },
   ];
   state.prios = [
     { id: 'P0', name: 'P0', color: '#b0432f', sort_order: 0, version: 1 },
@@ -335,10 +359,16 @@ async function loadMeta() {
 async function loadTasks() {
   state.tasks = await call('list_tasks');
   state.blocksByTask = {};
+  state.sessionsByTask = {};
   await Promise.all(state.tasks.filter((task) => task.is_blocked).map(async (task) => {
     const blocks = await call('list_blocks', { taskId: task.id });
     const active = blocks.find((block) => !block.ended_at);
     if (active) state.blocksByTask[task.id] = active;
+  }));
+  await Promise.all(state.tasks.filter((task) => task.status === 'in_progress' && !task.is_blocked).map(async (task) => {
+    const sessions = await call('list_sessions', { taskId: task.id });
+    const active = sessions.find((session) => !session.ended_at);
+    if (active) state.sessionsByTask[task.id] = active;
   }));
   render();
 }

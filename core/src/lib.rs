@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(tasks[0].title, "旧任务");
         assert_eq!(tasks[0].workspace_id.as_deref(), Some("daily"));
         assert_eq!(tasks[0].priority_id.as_deref(), Some("P1"));
-        assert_eq!(service.workspaces(false).unwrap().len(), 2);
+        assert_eq!(service.workspaces(false).unwrap().len(), 3);
         assert_eq!(service.priorities(false).unwrap().len(), 3);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -191,6 +191,43 @@ mod tests {
             CoreError::VersionConflict | CoreError::InvalidState(_)
         ));
         assert!(service.delete_priority(&p.id, last[0].version).is_err()); // 剩最后一个
+    }
+
+    #[test]
+    fn completion_archives_to_done_workspace_and_reopen_returns_home() {
+        let service = service();
+        // done 工作区由迁移种子
+        let done_ws = service.workspace("done").unwrap();
+        assert!(done_ws.is_some());
+        assert!(done_ws.unwrap().builtin);
+
+        // 在工作区创建任务并完成 → 自动归档到 done
+        let ws = service.create_workspace("项目X").unwrap();
+        let task = service
+            .create(CreateTaskCommand {
+                title: "归档验证".into(),
+                notes: None,
+                estimated_active_minutes: None,
+                sort_order: 0,
+                created_device_id: "test-device".into(),
+                workspace_id: Some(ws.id.clone()),
+                priority_id: None,
+            })
+            .unwrap();
+        assert_eq!(task.home_workspace_id.as_deref(), Some(ws.id.as_str()));
+        let task = service.get(&task.id).unwrap().unwrap();
+        let done = service.complete(&task.id, task.version).unwrap();
+        assert_eq!(done.workspace_id.as_deref(), Some("done"));
+
+        // 重新打开 → 回到原工作区
+        let reopened = service.reopen(&done.id, done.version).unwrap();
+        assert_eq!(reopened.workspace_id.as_deref(), Some(ws.id.as_str()));
+
+        // 内置工作区（含已完成）不能删除
+        let err = service.delete_workspace("done", 1).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidState(_)));
+        let err = service.delete_workspace("daily", 1).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidState(_)));
     }
 
     #[test]

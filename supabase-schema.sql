@@ -42,7 +42,8 @@ create table if not exists public.tasks (
     deleted_at text,
     version bigint not null default 1 check (version > 0),
     workspace_id text references public.workspaces(id),
-    priority_id text references public.priorities(id)
+    priority_id text references public.priorities(id),
+    home_workspace_id text references public.workspaces(id)
 );
 
 create table if not exists public.task_blocks (
@@ -86,13 +87,15 @@ create policy "cardhannis sessions sync" on public.work_sessions for all to anon
 -- 旧项目升级（已执行过旧版 schema 时在 SQL Editor 运行）：
 -- alter table public.tasks add column if not exists workspace_id text references public.workspaces(id);
 -- alter table public.tasks add column if not exists priority_id text references public.priorities(id);
+-- alter table public.tasks add column if not exists home_workspace_id text references public.workspaces(id);
 -- alter table public.tasks drop constraint if exists tasks_status_check;
 -- alter table public.tasks add constraint tasks_status_check check (status in ('pending','in_progress','waiting','completed'));
 
 -- 内置工作区与分级种子（幂等）
 insert into public.workspaces (id, name, sort_order, builtin, created_at, updated_at, version)
 values ('daily','日常',0,1,'1970-01-01T00:00:00.000Z','1970-01-01T00:00:00.000Z',1),
-       ('work','工作',1,1,'1970-01-01T00:00:00.000Z','1970-01-01T00:00:00.000Z',1)
+       ('work','工作',1,1,'1970-01-01T00:00:00.000Z','1970-01-01T00:00:00.000Z',1),
+       ('done','已完成',99,1,'1970-01-01T00:00:00.000Z','1970-01-01T00:00:00.000Z',1)
 on conflict (id) do nothing;
 insert into public.priorities (id, name, color, sort_order, created_at, updated_at, version)
 values ('P0','P0','#b0432f',0,'1970-01-01T00:00:00.000Z','1970-01-01T00:00:00.000Z',1),

@@ -50,6 +50,7 @@ pub struct Task {
     pub is_blocked: bool,
     pub workspace_id: Option<String>,
     pub priority_id: Option<String>,
+    pub home_workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

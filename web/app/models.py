@@ -50,6 +50,7 @@ class Task(TaskBase):
     is_blocked: bool
     workspace_id: Optional[str] = None
     priority_id: Optional[str] = None
+    home_workspace_id: Optional[str] = None
     active_block_id: Optional[str] = None
     active_block_version: Optional[int] = None
     active_block_reason: Optional[str] = None

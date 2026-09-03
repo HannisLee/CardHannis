@@ -61,6 +61,12 @@ impl TaskService {
         self.store.reopen_task(id, expected_version, now())
     }
 
+    /// 暂停：结束计时语义由适配层先调用 finish_work，这里把任务退回待处理。
+    pub fn pause(&self, id: &str, expected_version: i64) -> Result<Task> {
+        self.store
+            .set_status(id, expected_version, TaskStatus::Pending, now())
+    }
+
     pub fn delete(&self, id: &str, expected_version: i64) -> Result<()> {
         self.store.soft_delete_task(id, expected_version, now())
     }

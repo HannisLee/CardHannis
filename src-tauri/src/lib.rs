@@ -120,6 +120,25 @@ mod commands {
     }
 
     #[tauri::command]
+    pub fn pause_task(
+        state: State<'_, AppState>,
+        id: String,
+        expected_version: i64,
+    ) -> Result<Task, String> {
+        service(&state)?
+            .pause(&id, expected_version)
+            .map_err(error_message)
+    }
+
+    #[tauri::command]
+    pub fn list_sessions(
+        state: State<'_, AppState>,
+        task_id: String,
+    ) -> Result<Vec<WorkSession>, String> {
+        service(&state)?.sessions(&task_id).map_err(error_message)
+    }
+
+    #[tauri::command]
     pub fn reopen_task(
         state: State<'_, AppState>,
         id: String,
@@ -244,6 +263,8 @@ pub fn run() {
             commands::create_task,
             commands::complete_task,
             commands::delete_task,
+            commands::pause_task,
+            commands::list_sessions,
             commands::reopen_task,
             commands::start_work,
             commands::finish_work,
