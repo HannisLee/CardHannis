@@ -114,9 +114,8 @@ function render() {
     <nav class="ws-row">
       <div class="ws-tabs">${state.workspaces.map((w) => {
         const open = w.id === 'done' ? state.tasks.filter((t) => t.workspace_id === w.id).length : state.tasks.filter((t) => t.workspace_id === w.id && t.status !== 'completed').length;
-        return `<button class="ws-tab ${w.id === state.activeWs ? 'active' : ''}" data-ws="${w.id}" type="button">${escapeHtml(w.name)}<b>${open}</b>${w.builtin ? '' : `<span class="ws-x" data-ws-del="${w.id}" data-version="${w.version}" title="删除工作区">×</span>`}</button>`;
+        return `<button class="ws-tab ${w.id === state.activeWs ? 'active' : ''}" data-ws="${w.id}" type="button">${escapeHtml(w.name)}<b>${open}</b></button>`;
       }).join('')}<button class="ws-tool" id="ws-add" title="新建工作区" type="button">＋</button></div>
-      <button class="ws-tool" id="add-prio" title="添加分级" type="button">＋P</button>
     </nav>
     <div class="win-body">
       ${isDoneWs ? (doneRows.length ? `<div class="rows">${doneRows.map((t) => row(t)).join('')}</div>` : '<div class="empty-hint">还没有完成的任务</div>') : [...groups, unsorted.length ? { p: { id: 'none', name: '未分级' }, color: '#a8a89a', tasks: unsorted } : null].filter(Boolean).map(({ p, color, tasks }) => {
@@ -143,11 +142,7 @@ function render() {
       <label>标题<input name="title" required maxlength="200" placeholder="要做点什么？" autofocus /></label>
       <label>预计（小时，可选）<input name="estimated" type="number" min="0" step="0.5" placeholder="例如 2" /></label>
       <label>备注<textarea name="notes" rows="2" placeholder="可选"></textarea></label>
-      <div class="dlg-grid">
-        <label>分级<select name="priority" id="prio-select"></select></label>
-        <label>工作区<select name="workspace" id="ws-select"></select></label>
-      </div>
-      <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" value="default" type="submit">贴上</button></div>
+      <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" id="task-ok" type="button">贴上</button></div>
     </form>
   </dialog>
   <dialog id="block-dialog">
@@ -156,7 +151,20 @@ function render() {
       <p class="block-hint" id="block-task-title"></p>
       <label>原因<textarea name="reason" rows="2" required maxlength="300" placeholder="例如：等待接口文档"></textarea></label>
       <label>补充备注<textarea name="note" rows="2" placeholder="可选"></textarea></label>
-      <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" value="default" type="submit">确认阻塞</button></div>
+      <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" id="block-ok" type="button">确认阻塞</button></div>
+    </form>
+  </dialog>
+  <dialog id="prompt-dialog">
+    <form method="dialog" class="dlg-card">
+      <h2 id="prompt-title"></h2>
+      <label><span id="prompt-label"></span><input id="prompt-input" maxlength="60" /></label>
+      <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" id="prompt-ok" type="button">确定</button></div>
+    </form>
+  </dialog>
+  <dialog id="confirm-dialog">
+    <form method="dialog" class="dlg-card">
+      <h2 id="confirm-title"></h2>
+      <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" id="confirm-ok" type="button" style="background:#a5503f">确定</button></div>
     </form>
   </dialog>
   <dialog id="settings-dialog">
@@ -185,10 +193,7 @@ function render() {
   document.querySelector('#btn-min')?.addEventListener('click', () => theWindow()?.minimize());
   document.querySelector('#btn-close')?.addEventListener('click', () => theWindow()?.close());
   document.querySelector('#ws-add')?.addEventListener('click', addWorkspace);
-  document.querySelector('#add-prio')?.addEventListener('click', addPriority);
-  document.querySelectorAll('.ws-tab').forEach((tab) => tab.addEventListener('click', (e) => {
-    const del = e.target.closest('[data-ws-del]');
-    if (del) { removeWorkspace(del.dataset.wsDel, Number(del.dataset.version)); return; }
+  document.querySelectorAll('.ws-tab').forEach((tab) => tab.addEventListener('click', () => {
     state.activeWs = tab.dataset.ws;
     render();
   }));
@@ -199,14 +204,11 @@ function render() {
     render();
   }));
   document.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', () => handleGroupTool(b)));
-  document.querySelector('#task-form')?.addEventListener('submit', handleCreateTask);
-  document.querySelector('#block-form')?.addEventListener('submit', handleBlockSubmit);
   document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button)));
 }
 
 async function addWorkspace() {
-  const name = window.prompt('新工作区名称');
-  const trimmed = name && name.trim();
+  const trimmed = await openPrompt('新建工作区', '名称');
   if (!trimmed) return;
   try {
     const created = await call('create_workspace', { name: trimmed });
@@ -218,7 +220,8 @@ async function addWorkspace() {
 }
 async function removeWorkspace(id, expectedVersion) {
   const ws = state.workspaces.find((w) => w.id === id);
-  if (!window.confirm(`删除工作区「${ws ? ws.name : ''}」？`)) return;
+  const ok = await openConfirm(`删除工作区「${ws ? ws.name : ''}」？其中任务会一并移除。`);
+  if (!ok) return;
   try {
     await call('delete_workspace', { id, expectedVersion });
     await loadMeta();
@@ -228,8 +231,7 @@ async function removeWorkspace(id, expectedVersion) {
   } catch (error) { notify(error.message || '删除失败'); }
 }
 async function addPriority() {
-  const name = window.prompt('新分级名称（如：P3 / 紧急）');
-  const trimmed = name && name.trim();
+  const trimmed = await openPrompt('添加分级', '名称（如：P3 / 紧急）');
   if (!trimmed) return;
   try {
     await call('create_priority', { name: trimmed, color: PRIO_PALETTE[state.prios.length % PRIO_PALETTE.length] });
@@ -245,14 +247,13 @@ async function handleGroupTool(button) {
   try {
     if (button.dataset.gact === 'grp-add') { openTaskDialog(prioId); return; }
     if (button.dataset.gact === 'grp-rename') {
-      const name = window.prompt('重命名分级', prio ? prio.name : '');
-      const trimmed = name && name.trim();
+      const trimmed = await openPrompt('重命名分级', '名称', prio ? prio.name : '');
       if (!trimmed || !prio) return;
       await call('update_priority', { id: prioId, expectedVersion: prio.version, name: trimmed, color: prio.color });
       await loadMeta(); render(); notify('分级已重命名'); return;
     }
     if (button.dataset.gact === 'grp-del') {
-      if (!prio || !window.confirm(`删除空分级「${prio.name}」？`)) return;
+      return;
       await call('delete_priority', { id: prioId, expectedVersion: prio.version });
       await loadMeta(); render(); notify('分级已删除');
     }
@@ -260,11 +261,31 @@ async function handleGroupTool(button) {
 }
 
 function openTaskDialog(prioId) {
+  state.newTaskTarget = { ws: state.activeWs, prio: prioId || state.prios[0]?.id || null };
   const form = document.querySelector('#task-form');
   form.reset();
-  document.querySelector('#prio-select').innerHTML = state.prios.map((p) => `<option value="${p.id}" ${p.id === prioId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
-  document.querySelector('#ws-select').innerHTML = state.workspaces.map((w) => `<option value="${w.id}" ${w.id === state.activeWs ? 'selected' : ''}>${escapeHtml(w.name)}</option>`).join('');
   document.querySelector('#task-dialog').showModal();
+}
+
+async function submitTask() {
+  const form = document.querySelector('#task-form');
+  const title = form.querySelector('[name="title"]').value.trim();
+  if (!title) { notify('标题不能为空'); return; }
+  const target = state.newTaskTarget || { ws: state.activeWs, prio: state.prios[0]?.id || null };
+  try {
+    await call('create_task', {
+      input: {
+        title,
+        notes: form.querySelector('[name="notes"]').value.trim() || null,
+        estimatedActiveMinutes: parseEstimatedMinutes(form.querySelector('[name="estimated"]').value),
+        workspaceId: target.ws,
+        priorityId: target.prio,
+      },
+    });
+    document.querySelector('#task-dialog').close();
+    await loadTasks();
+    notify('任务已添加');
+  } catch (error) { notify(error.message || '创建任务失败'); }
 }
 
 async function togglePin() {
@@ -278,25 +299,6 @@ async function togglePin() {
   } catch (error) { pinned = !pinned; notify(error.message || '置顶失败'); }
 }
 
-async function handleCreateTask(event) {
-  event.preventDefault();
-  if (event.submitter && event.submitter.value === 'cancel') { event.currentTarget.closest('dialog').close(); return; }
-  const data = new FormData(event.currentTarget);
-  try {
-    await call('create_task', {
-      input: {
-        title: data.get('title'),
-        notes: data.get('notes') || null,
-        estimatedActiveMinutes: parseEstimatedMinutes(data.get('estimated')),
-        workspaceId: data.get('workspace') || state.activeWs,
-        priorityId: data.get('priority') || state.prios[0]?.id || null,
-      },
-    });
-    event.currentTarget.closest('dialog').close();
-    await loadTasks();
-    notify('任务已添加');
-  } catch (error) { notify(error.message || '创建任务失败'); }
-}
 
 async function handleAction(button) {
   const action = button.dataset.action;
@@ -328,14 +330,14 @@ function openBlockDialog(taskId) {
   document.querySelector('#block-dialog').showModal();
 }
 
-async function handleBlockSubmit(event) {
-  event.preventDefault();
-  if (event.submitter && event.submitter.value === 'cancel') { event.currentTarget.closest('dialog').close(); return; }
-  const reason = event.currentTarget.querySelector('[name="reason"]').value.trim();
-  if (!reason || !state.blockingTaskId) return;
+async function submitBlock() {
+  const form = document.querySelector('#block-form');
+  const reason = form.querySelector('[name="reason"]').value.trim();
+  if (!reason) { notify('阻塞原因不能为空'); return; }
+  if (!state.blockingTaskId) return;
   try {
-    await call('block_task', { taskId: state.blockingTaskId, reason, note: event.currentTarget.querySelector('[name="note"]').value.trim() || null });
-    event.currentTarget.closest('dialog').close();
+    await call('block_task', { taskId: state.blockingTaskId, reason, note: form.querySelector('[name="note"]').value.trim() || null });
+    document.querySelector('#block-dialog').close();
     state.blockingTaskId = null;
     await loadTasks();
     notify('已标记阻塞');
@@ -349,6 +351,7 @@ async function previewCommand(command, args) {
   if (command === 'list_workspaces') return state.workspaces;
   if (command === 'list_priorities') return state.prios;
   if (command === 'create_workspace') { const ws = { id: crypto.randomUUID(), name: args.name, sort_order: state.workspaces.length, builtin: false, version: 1 }; state.workspaces.push(ws); return ws; }
+  if (command === 'rename_workspace') { const w = state.workspaces.find((x) => x.id === args.id); if (w) { w.name = args.name; w.version += 1; } return w; }
   if (command === 'delete_workspace') {
     if (state.tasks.some((t) => t.workspace_id === args.id)) throw new Error('工作区还有任务，先移走再删除');
     state.workspaces = state.workspaces.filter((w) => w.id !== args.id);
@@ -423,6 +426,53 @@ async function loadTasks() {
 }
 
 
+// ===== 应用内 prompt / confirm（webview 无原生对话框） =====
+let promptResolve = null;
+let confirmResolve = null;
+function openPrompt(title, label, value = '') {
+  return new Promise((resolve) => {
+    promptResolve = resolve;
+    document.querySelector('#prompt-title').textContent = title;
+    document.querySelector('#prompt-label').textContent = label;
+    const input = document.querySelector('#prompt-input');
+    input.value = value;
+    document.querySelector('#prompt-dialog').showModal();
+    input.focus();
+  });
+}
+function openConfirm(title) {
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    document.querySelector('#confirm-title').textContent = title;
+    document.querySelector('#confirm-dialog').showModal();
+  });
+}
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#prompt-ok')) {
+    const v = document.querySelector('#prompt-input').value.trim();
+    document.querySelector('#prompt-dialog').close();
+    if (promptResolve) { promptResolve(v || null); promptResolve = null; }
+    return;
+  }
+  if (e.target.closest('#prompt-dialog [data-close]')) {
+    if (promptResolve) { promptResolve(null); promptResolve = null; }
+    return;
+  }
+  if (e.target.closest('#confirm-ok')) {
+    document.querySelector('#confirm-dialog').close();
+    if (confirmResolve) { confirmResolve(true); confirmResolve = null; }
+    return;
+  }
+  if (e.target.closest('#confirm-dialog [data-close]')) {
+    if (confirmResolve) { confirmResolve(false); confirmResolve = null; }
+    return;
+  }
+  if (e.target.closest('#task-ok')) { submitTask(); return; }
+  if (e.target.closest('#block-ok')) { submitBlock(); return; }
+});
+document.querySelector('#prompt-dialog')?.addEventListener('close', () => { if (promptResolve) { promptResolve(null); promptResolve = null; } });
+document.querySelector('#confirm-dialog')?.addEventListener('close', () => { if (confirmResolve) { confirmResolve(false); confirmResolve = null; } });
+
 // ===== 右键菜单（删除任务） =====
 let ctxMenu = null;
 function closeContextMenu() {
@@ -444,6 +494,47 @@ function openContextMenu(x, y, taskId, version) {
   });
   ctxMenu = menu;
 }
+function openWorkspaceMenu(x, y, ws) {
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.innerHTML = `<button type="button" data-ctx="ws-rename">✎ 重命名工作区</button><button type="button" data-ctx="ws-del">🗑 删除工作区</button>`;
+  document.body.appendChild(menu);
+  menu.style.left = `${Math.min(x, window.innerWidth - menu.offsetWidth - 6)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - menu.offsetHeight - 6)}px`;
+  menu.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-ctx]');
+    if (!btn) return;
+    closeContextMenu();
+    if (btn.dataset.ctx === 'ws-rename') {
+      const name = await openPrompt('重命名工作区', '名称', ws.name);
+      if (!name) return;
+      try {
+        await call('rename_workspace', { id: ws.id, expectedVersion: ws.version, name });
+        await loadMeta(); render(); notify('工作区已重命名');
+      } catch (error) { notify(error.message || '重命名失败'); }
+    } else if (btn.dataset.ctx === 'ws-del') {
+      await removeWorkspace(ws.id, ws.version);
+    }
+  });
+  ctxMenu = menu;
+}
+function openBodyMenu(x, y) {
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.innerHTML = `<button type="button" data-ctx="prio-add">＋ 添加分级</button>`;
+  document.body.appendChild(menu);
+  menu.style.left = `${Math.min(x, window.innerWidth - menu.offsetWidth - 6)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - menu.offsetHeight - 6)}px`;
+  menu.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-ctx]');
+    if (!btn) return;
+    closeContextMenu();
+    await addPriority();
+  });
+  ctxMenu = menu;
+}
 function openPrioMenu(x, y, prioId) {
   closeContextMenu();
   const menu = document.createElement('div');
@@ -458,7 +549,8 @@ function openPrioMenu(x, y, prioId) {
     closeContextMenu();
     const prio = state.prios.find((p) => p.id === prioId);
     if (!prio) return;
-    if (!window.confirm(`删除空分级「${prio.name}」？`)) return;
+    const ok = await openConfirm(`删除空分级「${prio.name}」？`);
+    if (!ok) return;
     try {
       await call('delete_priority', { id: prioId, expectedVersion: prio.version });
       await loadMeta();
@@ -469,7 +561,8 @@ function openPrioMenu(x, y, prioId) {
   ctxMenu = menu;
 }
 async function deleteTask(id, expectedVersion) {
-  if (!window.confirm('确定删除这个任务吗？')) return;
+  const ok = await openConfirm('确定删除这个任务吗？');
+  if (!ok) return;
   try {
     await call('delete_task', { id, expectedVersion });
     await loadTasks();
@@ -481,6 +574,21 @@ document.addEventListener('contextmenu', (e) => {
   if (r) {
     e.preventDefault();
     openContextMenu(e.clientX, e.clientY, r.dataset.id, Number(r.dataset.version));
+    return;
+  }
+  const wtab = e.target.closest('.ws-tab');
+  if (wtab && !wtab.classList.contains('active') === false || wtab) {
+    const wsId = wtab.dataset.ws;
+    const ws = state.workspaces.find((w) => w.id === wsId);
+    if (ws && !ws.builtin) {
+      e.preventDefault();
+      openWorkspaceMenu(e.clientX, e.clientY, ws);
+    }
+    return;
+  }
+  if (e.target.closest('.win-body') && !e.target.closest('.row') && !e.target.closest('.sec-row')) {
+    e.preventDefault();
+    openBodyMenu(e.clientX, e.clientY);
     return;
   }
   const head = e.target.closest('.sec-row');
