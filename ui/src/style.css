@@ -32,6 +32,12 @@ h2, h3, p { margin: 0; }
 .rt { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; font-weight: 650; color: #3c413a; letter-spacing: .01em; }
 .row.done .rt { text-decoration: line-through; color: #a3a596; font-weight: 400; }
 .ra { display: flex; gap: 1px; flex: none; }
+.pill { flex: none; padding: 1.5px 8px; border-radius: 999px; font-size: 8px; font-weight: 700; letter-spacing: .05em; color: #96988e; background: rgba(150, 150, 132, .14); }
+.pill.in_progress { color: #7d9d8b; background: #e6efe7; }
+.pill.blocked { color: #ad8a72; background: #f2e6da; }
+.pill.pending { color: #a89e74; background: #f0ebd4; }
+.pill.waiting { color: #8d9cb3; background: #e8edf4; }
+.pill.completed { color: #a0a299; background: #eae9e1; }
 .empty-hint { padding: 46px 10px; text-align: center; color: #aca78f; font-size: 11.5px; line-height: 1.9; }
 
 .nb { height: 23px; min-width: 23px; padding: 0 5px; border: 0; border-radius: 6px; background: transparent; color: #7e887a; font-size: 12.5px; transition: background .12s, color .12s; }

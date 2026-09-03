@@ -67,16 +67,25 @@
   .note-top { display:flex;align-items:center;justify-content:space-between;gap:6px; }
   .priority-chip { display:grid;place-items:center;min-width:30px;height:21px;padding:0 6px;border:1px solid;border-radius:6px;font-family:ui-monospace,Menlo,monospace;font-size:9px;font-weight:800;transition:.16s; }
   .priority-chip:hover { transform:translateY(-1px);filter:brightness(.95); }
-  .status-pill { padding:2px 6px;font-size:8.5px;border-radius:5px; }
-  .status-pill.waiting { color:#5c7699;background:#e9eff7; }
-  .note h3 { margin-top:8px;font-size:12.5px;line-height:1.45;letter-spacing:0;white-space:normal;word-break:break-word;font-weight:700;color:#3b3f38; }
+  .status-pill { flex: none; padding: 1.5px 8px; border-radius: 999px; font-size: 8px; font-weight: 700; letter-spacing: .05em; color: #96988e; background: rgba(150, 150, 132, .14); }
+  .status-pill.in_progress { color: #7d9d8b; background: #e6efe7; }
+  .status-pill.blocked { color: #ad8a72; background: #f2e6da; }
+  .status-pill.pending { color: #a89e74; background: #f0ebd4; }
+  .status-pill.completed { color: #a0a299; background: #eae9e1; }
+  .status-pill.waiting { color: #8d9cb3; background: #e8edf4; }
+  .note h3 { margin-top:8px;font-size:13.5px;line-height:1.45;letter-spacing:0;white-space:normal;word-break:break-word;font-weight:700;color:#3b3f38; }
   .note.done h3 { text-decoration:line-through;color:#a2a89f; }
   .note p { margin:5px 0 0;font-size:10px;line-height:1.5;white-space:normal;overflow:visible;text-overflow:clip;color:#8b8365; }
   .note p.block-reason { color:#a45b38; } .note p.waiting-note { color:#66809f; }
   .task-meta { display:flex;gap:8px;margin-top:7px;color:#b3ab8f;font-family:ui-monospace,Menlo,monospace;font-size:8px; }
   .task-actions { display:flex;flex-wrap:wrap;gap:2px;margin:8px 0 0; }
-  .act-button { height:20px;padding:0 6px;gap:3px;border-radius:5px;font-size:9.5px;font-weight:700; }
+  .act-button { height:24px;min-width:24px;padding:0 5px;gap:0;border-radius:6px;font-size:12px;font-weight:700; }
   .act-button.done-act { color:#4e836b; }
+
+  /* 右键菜单 */
+  .ctx-menu { position:fixed;z-index:99;padding:3px;border:1px solid #cfc9b4;border-radius:9px;background:#fffdf4;box-shadow:0 8px 22px rgba(60,58,40,.22); }
+  .ctx-menu button { display:block;width:100%;border:0;border-radius:6px;padding:6px 13px;background:transparent;color:#6b6f63;font-size:11px;text-align:left;white-space:nowrap; }
+  .ctx-menu button:hover { background:rgba(185,108,94,.13);color:#a5503f; }
 
   .demo-foot { margin-top:26px;text-align:center;color:#c2c4ba;font-size:9px;font-family:ui-monospace,Menlo,monospace;letter-spacing:.12em; }
   dialog .dialog-card { width:340px;padding:22px; }
@@ -241,7 +250,7 @@ function card(task) {
   const st = STATUSES[task.status];
   const prio = prioOf(task.priority);
   const blocked = task.status === "blocked";
-  return `<article class="task-card task-row note ${task.status === "completed" ? "done" : ""} ${blocked ? "blocked" : ""}" style="--paper:${prio.color}1f;--tilt:${task.tilt ?? 0}deg">
+  return `<article class="task-card task-row note ${task.status === "completed" ? "done" : ""} ${blocked ? "blocked" : ""}" data-task-id="${task.id}" style="--paper:${prio.color}1f;--tilt:${task.tilt ?? 0}deg">
     <div class="note-top">
       <button class="priority-chip" style="${chipStyle(prio)}" data-act="cycle" data-id="${task.id}" title="点击轮换分级" type="button">${escapeHtml(prio.label)}</button>
       <span class="status-pill ${st.cls}">${st.label}</span>
@@ -257,7 +266,6 @@ function card(task) {
       ${task.status !== "completed" && !blocked ? `<button class="act-button" data-act="block" data-id="${task.id}" title="标记阻塞" type="button">⏸</button>` : ""}
       ${blocked ? `<button class="act-button" data-act="unblock" data-id="${task.id}" title="解除阻塞，进入等待中" type="button">▶⏏</button>` : ""}
       ${task.status !== "completed" ? `<button class="act-button done-act" data-act="toggle-done" data-id="${task.id}" title="完成" type="button">✓</button>` : `<button class="act-button" data-act="toggle-done" data-id="${task.id}" title="重新打开" type="button">↺</button>`}
-      <button class="act-button danger" data-act="delete" data-id="${task.id}" title="删除任务" type="button">⌫</button>
     </div>
   </article>`;
 }
@@ -383,6 +391,32 @@ $("task-form").addEventListener("submit", (e) => {
 });
 
 document.addEventListener("click", (e) => { const c = e.target.closest("[data-close]"); if (c) { const d = c.closest("dialog"); if (d) d.close(); } });
+
+let ctxMenu = null;
+function closeRowMenu() { if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; } }
+function openRowMenu(x, y, taskId) {
+  closeRowMenu();
+  const menu = document.createElement("div");
+  menu.className = "ctx-menu";
+  menu.innerHTML = `<button type="button">🗑 删除任务</button>`;
+  document.body.appendChild(menu);
+  menu.style.left = Math.min(x, window.innerWidth - menu.offsetWidth - 6) + "px";
+  menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 6) + "px";
+  menu.addEventListener("click", () => {
+    closeRowMenu();
+    if (!confirm("确定删除这个任务吗？")) return;
+    state.tasks = state.tasks.filter((t) => t.id !== taskId);
+    save(); render(); notify("任务已删除");
+  });
+  ctxMenu = menu;
+}
+document.addEventListener("contextmenu", (e) => {
+  const row = e.target.closest(".task-row");
+  if (!row) { closeRowMenu(); return; }
+  e.preventDefault();
+  openRowMenu(e.clientX, e.clientY, row.dataset.taskId);
+});
+document.addEventListener("click", (e) => { if (ctxMenu && !ctxMenu.contains(e.target)) closeRowMenu(); });
 
 $("reset-link").addEventListener("click", (e) => { e.preventDefault(); if (confirm("恢复初始演示数据？")) { state = seed(); save(); render(); notify("演示数据已重置"); } });
 
