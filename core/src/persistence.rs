@@ -21,6 +21,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0004_archive_completed.sql",
         include_str!("../migrations/0004_archive_completed.sql"),
     ),
+    (
+        "0005_merge_waiting.sql",
+        include_str!("../migrations/0005_merge_waiting.sql"),
+    ),
 ];
 
 /// SQLite 持久化实现。上层 GUI、Web API 和 CLI 不应直接拼 SQL，而应通过
@@ -157,7 +161,6 @@ impl TaskStore {
         let completed_at = (status == TaskStatus::Completed).then(|| updated_at.clone());
         let started_at = match status {
             TaskStatus::Pending => None,
-            TaskStatus::Waiting => task.started_at.clone(),
             TaskStatus::InProgress | TaskStatus::Completed => {
                 task.started_at.or(Some(updated_at.clone()))
             }
@@ -213,7 +216,7 @@ impl TaskStore {
             "INSERT INTO work_sessions (id, task_id, started_at, note, created_at) VALUES (?1, ?2, ?3, ?4, ?3)",
             params![id, task_id, started_at, note],
         ).map_err(map_constraint_error)?;
-        if matches!(task.status, TaskStatus::Pending | TaskStatus::Waiting) {
+        if task.status == TaskStatus::Pending {
             tx.execute("UPDATE tasks SET status = 'in_progress', started_at = ?1, updated_at = ?1, version = version + 1 WHERE id = ?2", params![started_at, task_id])?;
         }
         tx.commit()?;
@@ -280,9 +283,9 @@ impl TaskStore {
             let error = resolve_block_update_error(&tx, block_id, expected_version);
             return Err(error);
         }
-        // 解除阻塞后任务回到等待中（未完成且未删除时）
+        // 解除阻塞后任务回到待处理（未完成且未删除时）
         tx.execute(
-            "UPDATE tasks SET status = 'waiting', updated_at = ?1, version = version + 1 WHERE id = (SELECT task_id FROM task_blocks WHERE id = ?2) AND deleted_at IS NULL AND status <> 'completed'",
+            "UPDATE tasks SET status = 'pending', updated_at = ?1, version = version + 1 WHERE id = (SELECT task_id FROM task_blocks WHERE id = ?2) AND deleted_at IS NULL AND status <> 'completed'",
             params![ended_at, block_id],
         )?;
         tx.commit()?;

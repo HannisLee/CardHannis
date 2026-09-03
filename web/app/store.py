@@ -138,8 +138,6 @@ class TaskStore:
         completed_at = None
         if status == "completed":
             completed_at = updated_at
-        elif status == "waiting":
-            started_at = started_at  # 等待中保留既有开始时间
         elif status != "pending":
             started_at = started_at or updated_at
         else:
@@ -218,9 +216,9 @@ class TaskStore:
             if block["version"] != expected_version:
                 raise StoreError("版本冲突")
             raise StoreError("阻塞已经解除")
-        # 解除阻塞后任务进入等待中（与 Rust 核心一致）
+        # 解除阻塞后任务回到待处理（与 Rust 核心一致）
         self._execute(
-            "UPDATE tasks SET status = 'waiting', updated_at = ?1, version = version + 1 WHERE id = (SELECT task_id FROM task_blocks WHERE id = ?2) AND deleted_at IS NULL AND status <> 'completed'",
+            "UPDATE tasks SET status = 'pending', updated_at = ?1, version = version + 1 WHERE id = (SELECT task_id FROM task_blocks WHERE id = ?2) AND deleted_at IS NULL AND status <> 'completed'",
             (ended_at, block_id),
         )
         return self.get_block(block_id) or {}

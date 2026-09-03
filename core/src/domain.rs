@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 pub enum TaskStatus {
     Pending,
     InProgress,
-    Waiting,
     Completed,
 }
 
@@ -15,7 +14,6 @@ impl TaskStatus {
         match self {
             Self::Pending => "pending",
             Self::InProgress => "in_progress",
-            Self::Waiting => "waiting",
             Self::Completed => "completed",
         }
     }
@@ -24,7 +22,6 @@ impl TaskStatus {
         match value {
             "pending" => Ok(Self::Pending),
             "in_progress" => Ok(Self::InProgress),
-            "waiting" => Ok(Self::Waiting),
             "completed" => Ok(Self::Completed),
             other => Err(CoreError::InvalidStatus(other.to_owned())),
         }

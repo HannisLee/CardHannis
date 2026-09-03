@@ -40,7 +40,7 @@ function parseEstimatedMinutes(hours) {
 }
 function pillInfo(task) {
   if (task.is_blocked) return { cls: 'blocked', label: '阻塞' };
-  return { in_progress: { cls: 'in_progress', label: '进行' }, pending: { cls: 'pending', label: '待办' }, waiting: { cls: 'waiting', label: '等待' }, completed: { cls: 'completed', label: '完成' } }[task.status];
+  return { in_progress: { cls: 'in_progress', label: '进行' }, completed: { cls: 'completed', label: '完成' } }[task.status] || { cls: 'pending', label: '待办' };
 }
 const prioColor = (p, i) => p.color || PRIO_PALETTE[i % PRIO_PALETTE.length];
 
@@ -109,9 +109,8 @@ function render() {
           <div class="sec-row">
             <button class="sec-head" type="button" data-toggle="${p.id}"><span class="sec-chev">▼</span><span class="sec-dot" style="background:${color}"></span><span>${escapeHtml(p.name)}</span><span class="sec-count">${tasks.length}</span></button>
             ${p.id !== 'none' ? `<span class="sec-tools">
-              <button data-gact="grp-add" data-prio="${p.id}" title="在此分级新任务" type="button">＋</button>
-              <button data-gact="grp-rename" data-prio="${p.id}" data-version="${p.version}" title="重命名分级" type="button">✎</button>
-              <button data-gact="grp-del" class="danger" data-prio="${p.id}" data-version="${p.version}" title="删除分级（需为空）" type="button">✕</button>
+              <button class="nb" data-gact="grp-add" data-prio="${p.id}" title="在此分级新任务" type="button">＋</button>
+              <button class="nb" data-gact="grp-rename" data-prio="${p.id}" data-version="${p.version}" title="重命名分级" type="button">✎</button>
             </span>` : ''}
           </div>
           <div class="rows">${tasks.length ? tasks.map((t) => row(t)).join('') : '<div class="row-empty">暂无任务，点 ＋ 添加</div>'}</div>
@@ -366,7 +365,7 @@ async function previewCommand(command, args) {
   if (command === 'start_work') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.status = 'in_progress'; task.version += 1; task.activeSession = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null }; } }
   if (command === 'list_blocks') { const task = state.tasks.find((item) => item.id === args.taskId); return task?.activeBlock ? [task.activeBlock] : []; }
   if (command === 'block_task') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.is_blocked = true; task.activeBlock = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null, reason: args.reason, note: args.note ?? null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, deleted_at: null }; } }
-  if (command === 'unblock_task') { for (const task of state.tasks) { if (task.activeBlock?.id === args.blockId) { task.is_blocked = false; delete task.activeBlock; task.status = 'waiting'; task.version += 1; } } }
+  if (command === 'unblock_task') { for (const task of state.tasks) { if (task.activeBlock?.id === args.blockId) { task.is_blocked = false; delete task.activeBlock; task.status = 'pending'; task.version += 1; } } }
 }
 function seedPreviewMeta() {
   state.workspaces = [
@@ -385,7 +384,7 @@ async function loadMeta() {
   if (isTauri()) {
     state.workspaces = await call('list_workspaces');
     state.prios = await call('list_priorities');
-  } else {
+  } else if (!state.workspaces.length) {
     seedPreviewMeta();
   }
   if (!state.activeWs) state.activeWs = state.workspaces[0]?.id || null;
@@ -430,6 +429,30 @@ function openContextMenu(x, y, taskId, version) {
   });
   ctxMenu = menu;
 }
+function openPrioMenu(x, y, prioId) {
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.innerHTML = `<button type="button" data-ctx="prio-del">🗑 删除分级</button>`;
+  document.body.appendChild(menu);
+  menu.style.left = `${Math.min(x, window.innerWidth - menu.offsetWidth - 6)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - menu.offsetHeight - 6)}px`;
+  menu.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-ctx]');
+    if (!btn) return;
+    closeContextMenu();
+    const prio = state.prios.find((p) => p.id === prioId);
+    if (!prio) return;
+    if (!window.confirm(`删除空分级「${prio.name}」？`)) return;
+    try {
+      await call('delete_priority', { id: prioId, expectedVersion: prio.version });
+      await loadMeta();
+      render();
+      notify('分级已删除');
+    } catch (error) { notify(error.message || '删除失败'); }
+  });
+  ctxMenu = menu;
+}
 async function deleteTask(id, expectedVersion) {
   if (!window.confirm('确定删除这个任务吗？')) return;
   try {
@@ -440,9 +463,21 @@ async function deleteTask(id, expectedVersion) {
 }
 document.addEventListener('contextmenu', (e) => {
   const r = e.target.closest('.row');
-  if (!r) { closeContextMenu(); return; }
-  e.preventDefault();
-  openContextMenu(e.clientX, e.clientY, r.dataset.id, Number(r.dataset.version));
+  if (r) {
+    e.preventDefault();
+    openContextMenu(e.clientX, e.clientY, r.dataset.id, Number(r.dataset.version));
+    return;
+  }
+  const head = e.target.closest('.sec-row');
+  if (head) {
+    const prioId = head.closest('.sec').dataset.prio;
+    if (prioId && prioId !== 'none') {
+      e.preventDefault();
+      openPrioMenu(e.clientX, e.clientY, prioId);
+    }
+    return;
+  }
+  closeContextMenu();
 });
 document.addEventListener('click', (e) => {
   if (ctxMenu && !ctxMenu.contains(e.target)) closeContextMenu();

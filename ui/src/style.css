@@ -29,7 +29,7 @@ h2, h3, p { margin: 0; }
 .sec-count { padding: 1px 7px; border-radius: 10px; background: #e8e5d7; color: #8b8f80; font-size: 9px; font-weight: 700; }
 .rows { display: block; padding: 1px 4px 6px; }
 .sec.collapsed .rows { display: none; }
-.row { display: flex; align-items: center; gap: 7px; height: 31px; padding: 0 6px; border-radius: 6px; }
+.row { display: flex; align-items: center; gap: 7px; height: 27px; padding: 0 6px; border-radius: 6px; }
 .row:hover { background: rgba(60, 104, 87, .08); }
 .rt { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; font-weight: 650; color: #3c413a; letter-spacing: .01em; }
 .row.done .rt { text-decoration: line-through; color: #a3a596; font-weight: 400; }
@@ -89,7 +89,8 @@ dialog::backdrop { background: rgba(40, 46, 38, .3); backdrop-filter: blur(2px);
 .sec-row { display: flex; align-items: center; }
 .sec-head { flex: 1; min-width: 0; }
 .sec-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
-.sec-tools { display: flex; gap: 1px; padding-right: 5px; }
+.sec-tools { display: flex; gap: 1px; padding-right: 6px; }
+.sec-tools .nb { height: 22px; width: 24px; font-size: 13px; }
 .sec-tools button { width: 17px; height: 17px; border: 0; border-radius: 4px; background: transparent; color: #9aa39a; font-size: 9px; line-height: 1; padding: 0; }
 .sec-tools button:hover { background: rgba(60, 104, 87, .13); color: #2f6654; }
 .sec-tools button.danger:hover { color: #b96c5e; background: rgba(185, 108, 94, .14); }

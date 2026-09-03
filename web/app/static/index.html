@@ -347,7 +347,7 @@ $("group-stack").addEventListener("click", (e) => {
     case "start": task.status = "in_progress"; break;
     case "pause": task.status = "pending"; break;
     case "unwait": task.status = "pending"; break;
-    case "unblock": task.status = "waiting"; task.reason = null; break;
+    case "unblock": task.status = "pending"; task.reason = null; break;
     case "delete": state.tasks = state.tasks.filter((t) => t.id !== task.id); break;
     case "block": openBlock(task.id); return;
   }

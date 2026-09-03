@@ -231,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn unblock_moves_task_to_waiting_and_reopen_works() {
+    fn unblock_returns_to_pending_and_reopen_works() {
         let service = service();
         let task = create(&service);
         let block = service
@@ -243,10 +243,10 @@ mod tests {
                 },
             )
             .unwrap();
-        // 解除阻塞 → 等待中
+        // 解除阻塞 → 待处理（等待中已并入）
         service.unblock(&block.id, block.version).unwrap();
         let task = service.get(&task.id).unwrap().unwrap();
-        assert_eq!(task.status, TaskStatus::Waiting);
+        assert_eq!(task.status, TaskStatus::Pending);
         assert!(!task.is_blocked);
         // 等待中可以开工
         service.begin_work(&task.id, None).unwrap();
