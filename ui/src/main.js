@@ -36,7 +36,7 @@ function row(task) {
   const block = state.blocksByTask[task.id];
   const pill = pillInfo(task);
   const tip = escapeHtml([task.title, task.is_blocked && block && block.reason ? `阻塞：${block.reason}` : '', task.notes || '', task.estimated_active_minutes != null ? formatEstimatedHours(task.estimated_active_minutes) : ''].filter(Boolean).join(' ｜ '));
-  return `<div class="row ${done ? 'done' : ''}" title="${tip}">
+  return `<div class="row ${done ? 'done' : ''}" data-id="${task.id}" data-version="${task.version}" title="${tip}">
     <span class="rt">${escapeHtml(task.title)}</span>
     <span class="pill ${pill.cls}">${pill.label}</span>
     <span class="ra">
@@ -44,7 +44,6 @@ function row(task) {
       ${!done && !task.is_blocked ? `<button class="nb" data-action="block" data-id="${task.id}" title="标记阻塞" type="button">⏸</button>` : ''}
       ${task.is_blocked && block ? `<button class="nb" data-action="unblock" data-block-id="${block.id}" data-block-version="${block.version}" title="解除阻塞 → 等待中" type="button">▶⏏</button>` : ''}
       ${!done ? `<button class="nb ok" data-action="complete" data-id="${task.id}" data-version="${task.version}" title="完成任务" type="button">✓</button>` : `<button class="nb" data-action="reopen" data-id="${task.id}" data-version="${task.version}" title="重新打开" type="button">↺</button>`}
-      <button class="nb danger" data-action="delete" data-id="${task.id}" data-version="${task.version}" title="删除任务" type="button">⌫</button>
     </span>
   </div>`;
 }
@@ -250,7 +249,6 @@ async function handleAction(button) {
     if (action === 'complete') { await call('complete_task', { id, expectedVersion: version }); notify('任务完成 ✦'); }
     if (action === 'reopen') { await call('reopen_task', { id, expectedVersion: version }); notify('任务已重新打开'); }
     if (action === 'work') { await call('start_work', { taskId: id }); notify('开始计时 ▶'); }
-    if (action === 'delete') { if (!window.confirm('确定删除这个任务吗？')) return; await call('delete_task', { id, expectedVersion: version }); notify('任务已删除'); }
     if (action === 'block') { openBlockDialog(id); return; }
     if (action === 'unblock') { await call('unblock_task', { blockId: button.dataset.blockId, expectedVersion: Number(button.dataset.blockVersion) }); notify('已解除阻塞，进入等待中'); }
     await loadTasks();
@@ -344,6 +342,47 @@ async function loadTasks() {
   }));
   render();
 }
+
+
+// ===== 右键菜单（删除任务） =====
+let ctxMenu = null;
+function closeContextMenu() {
+  if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; }
+}
+function openContextMenu(x, y, taskId, version) {
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.innerHTML = `<button type="button" data-ctx="delete">🗑 删除任务</button>`;
+  document.body.appendChild(menu);
+  menu.style.left = `${Math.min(x, window.innerWidth - menu.offsetWidth - 6)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - menu.offsetHeight - 6)}px`;
+  menu.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-ctx]');
+    if (!btn) return;
+    closeContextMenu();
+    if (btn.dataset.ctx === 'delete') await deleteTask(taskId, version);
+  });
+  ctxMenu = menu;
+}
+async function deleteTask(id, expectedVersion) {
+  if (!window.confirm('确定删除这个任务吗？')) return;
+  try {
+    await call('delete_task', { id, expectedVersion });
+    await loadTasks();
+    notify('任务已删除');
+  } catch (error) { notify(error.message || '删除失败'); }
+}
+document.addEventListener('contextmenu', (e) => {
+  const r = e.target.closest('.row');
+  if (!r) { closeContextMenu(); return; }
+  e.preventDefault();
+  openContextMenu(e.clientX, e.clientY, r.dataset.id, Number(r.dataset.version));
+});
+document.addEventListener('click', (e) => {
+  if (ctxMenu && !ctxMenu.contains(e.target)) closeContextMenu();
+});
+window.addEventListener('blur', closeContextMenu);
 
 function notify(message) {
   const toast = document.querySelector('#toast');
