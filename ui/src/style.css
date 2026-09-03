@@ -1,8 +1,9 @@
 :root { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif; color: #33403a; }
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; }
-body { margin: 0; background: transparent; overflow: hidden; }
+body { margin: 0; background: transparent; overflow: hidden; user-select: none; -webkit-user-select: none; }
 button, input, textarea { font: inherit; } button { cursor: pointer; }
+input, textarea, select { user-select: text; -webkit-user-select: text; }
 h2, h3, p { margin: 0; }
 
 .win { height: 100%; padding: 8px; display: flex; }
