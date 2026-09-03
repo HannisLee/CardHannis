@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub enum TaskStatus {
     Pending,
     InProgress,
+    Waiting,
     Completed,
 }
 
@@ -14,6 +15,7 @@ impl TaskStatus {
         match self {
             Self::Pending => "pending",
             Self::InProgress => "in_progress",
+            Self::Waiting => "waiting",
             Self::Completed => "completed",
         }
     }
@@ -22,6 +24,7 @@ impl TaskStatus {
         match value {
             "pending" => Ok(Self::Pending),
             "in_progress" => Ok(Self::InProgress),
+            "waiting" => Ok(Self::Waiting),
             "completed" => Ok(Self::Completed),
             other => Err(CoreError::InvalidStatus(other.to_owned())),
         }
@@ -45,6 +48,8 @@ pub struct Task {
     pub deleted_at: Option<String>,
     pub version: i64,
     pub is_blocked: bool,
+    pub workspace_id: Option<String>,
+    pub priority_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,4 +83,30 @@ pub struct NewTask {
     pub estimated_active_minutes: Option<i64>,
     pub sort_order: i64,
     pub created_device_id: String,
+    pub workspace_id: Option<String>,
+    pub priority_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Workspace {
+    pub id: String,
+    pub name: String,
+    pub sort_order: i64,
+    pub builtin: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub deleted_at: Option<String>,
+    pub version: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Priority {
+    pub id: String,
+    pub name: String,
+    pub color: Option<String>,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub deleted_at: Option<String>,
+    pub version: i64,
 }

@@ -4,6 +4,28 @@
 -- open for a single trusted project; add Supabase Auth and per-user RLS before
 -- using this database for multiple users or sensitive data.
 
+create table if not exists public.workspaces (
+    id text primary key,
+    name text not null check (length(trim(name)) > 0),
+    sort_order bigint not null default 0,
+    builtin bigint not null default 0,
+    created_at text not null,
+    updated_at text not null,
+    deleted_at text,
+    version bigint not null default 1 check (version > 0)
+);
+
+create table if not exists public.priorities (
+    id text primary key,
+    name text not null check (length(trim(name)) > 0),
+    color text,
+    sort_order bigint not null default 0,
+    created_at text not null,
+    updated_at text not null,
+    deleted_at text,
+    version bigint not null default 1 check (version > 0)
+);
+
 create table if not exists public.tasks (
     id text primary key,
     title text not null check (length(trim(title)) > 0),
@@ -13,12 +35,14 @@ create table if not exists public.tasks (
     created_at text not null,
     started_at text,
     completed_at text,
-    status text not null default 'pending' check (status in ('pending', 'in_progress', 'completed')),
+    status text not null default 'pending' check (status in ('pending', 'in_progress', 'waiting', 'completed')),
     sort_order bigint not null default 0,
     created_device_id text not null check (length(trim(created_device_id)) > 0),
     updated_at text not null,
     deleted_at text,
-    version bigint not null default 1 check (version > 0)
+    version bigint not null default 1 check (version > 0),
+    workspace_id text references public.workspaces(id),
+    priority_id text references public.priorities(id)
 );
 
 create table if not exists public.task_blocks (
@@ -58,3 +82,26 @@ drop policy if exists "cardhannis blocks sync" on public.task_blocks;
 create policy "cardhannis blocks sync" on public.task_blocks for all to anon, authenticated using (true) with check (true);
 drop policy if exists "cardhannis sessions sync" on public.work_sessions;
 create policy "cardhannis sessions sync" on public.work_sessions for all to anon, authenticated using (true) with check (true);
+
+-- 旧项目升级（已执行过旧版 schema 时在 SQL Editor 运行）：
+-- alter table public.tasks add column if not exists workspace_id text references public.workspaces(id);
+-- alter table public.tasks add column if not exists priority_id text references public.priorities(id);
+-- alter table public.tasks drop constraint if exists tasks_status_check;
+-- alter table public.tasks add constraint tasks_status_check check (status in ('pending','in_progress','waiting','completed'));
+
+-- 内置工作区与分级种子（幂等）
+insert into public.workspaces (id, name, sort_order, builtin, created_at, updated_at, version)
+values ('daily','日常',0,1,'1970-01-01T00:00:00.000Z','1970-01-01T00:00:00.000Z',1),
+       ('work','工作',1,1,'1970-01-01T00:00:00.000Z','1970-01-01T00:00:00.000Z',1)
+on conflict (id) do nothing;
+insert into public.priorities (id, name, color, sort_order, created_at, updated_at, version)
+values ('P0','P0','#b0432f',0,'1970-01-01T00:00:00.000Z','1970-01-01T00:00:00.000Z',1),
+       ('P1','P1','#b16d42',1,'1970-01-01T00:00:00.000Z','1970-01-01T00:00:00.000Z',1),
+       ('P2','P2','#8f9a90',2,'1970-01-01T00:00:00.000Z','1970-01-01T00:00:00.000Z',1)
+on conflict (id) do nothing;
+
+-- 新表策略（与现有 MVP 保持一致的宽松策略）
+alter table public.workspaces enable row level security;
+alter table public.priorities enable row level security;
+create policy "workspaces open" on public.workspaces for all using (true) with check (true);
+create policy "priorities open" on public.priorities for all using (true) with check (true);

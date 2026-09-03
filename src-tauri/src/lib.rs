@@ -9,7 +9,9 @@ pub struct AppState {
 
 mod commands {
     use super::AppState;
-    use cardhannis_core::{BlockTaskCommand, CreateTaskCommand, Task, TaskBlock, WorkSession};
+    use cardhannis_core::{
+        BlockTaskCommand, CreateTaskCommand, Priority, Task, TaskBlock, WorkSession, Workspace,
+    };
     use tauri::State;
 
     fn service<'a>(
@@ -36,6 +38,8 @@ mod commands {
         pub title: String,
         pub notes: Option<String>,
         pub estimated_active_minutes: Option<i64>,
+        pub workspace_id: Option<String>,
+        pub priority_id: Option<String>,
     }
 
     #[tauri::command]
@@ -47,6 +51,8 @@ mod commands {
                 estimated_active_minutes: input.estimated_active_minutes,
                 sort_order: 0,
                 created_device_id: state.device_id.clone(),
+                workspace_id: input.workspace_id,
+                priority_id: input.priority_id,
             })
             .map_err(error_message)
     }
@@ -114,6 +120,93 @@ mod commands {
     }
 
     #[tauri::command]
+    pub fn reopen_task(
+        state: State<'_, AppState>,
+        id: String,
+        expected_version: i64,
+    ) -> Result<Task, String> {
+        service(&state)?
+            .reopen(&id, expected_version)
+            .map_err(error_message)
+    }
+
+    // ===== 工作区 =====
+    #[tauri::command]
+    pub fn list_workspaces(state: State<'_, AppState>) -> Result<Vec<Workspace>, String> {
+        service(&state)?.workspaces(false).map_err(error_message)
+    }
+
+    #[tauri::command]
+    pub fn create_workspace(state: State<'_, AppState>, name: String) -> Result<Workspace, String> {
+        service(&state)?
+            .create_workspace(&name)
+            .map_err(error_message)
+    }
+
+    #[tauri::command]
+    pub fn rename_workspace(
+        state: State<'_, AppState>,
+        id: String,
+        expected_version: i64,
+        name: String,
+    ) -> Result<Workspace, String> {
+        service(&state)?
+            .rename_workspace(&id, expected_version, &name)
+            .map_err(error_message)
+    }
+
+    #[tauri::command]
+    pub fn delete_workspace(
+        state: State<'_, AppState>,
+        id: String,
+        expected_version: i64,
+    ) -> Result<(), String> {
+        service(&state)?
+            .delete_workspace(&id, expected_version)
+            .map_err(error_message)
+    }
+
+    // ===== 优先级分级 =====
+    #[tauri::command]
+    pub fn list_priorities(state: State<'_, AppState>) -> Result<Vec<Priority>, String> {
+        service(&state)?.priorities(false).map_err(error_message)
+    }
+
+    #[tauri::command]
+    pub fn create_priority(
+        state: State<'_, AppState>,
+        name: String,
+        color: Option<String>,
+    ) -> Result<Priority, String> {
+        service(&state)?
+            .create_priority(&name, color.as_deref())
+            .map_err(error_message)
+    }
+
+    #[tauri::command]
+    pub fn update_priority(
+        state: State<'_, AppState>,
+        id: String,
+        expected_version: i64,
+        name: String,
+        color: Option<String>,
+    ) -> Result<Priority, String> {
+        service(&state)?
+            .update_priority(&id, expected_version, &name, color.as_deref())
+            .map_err(error_message)
+    }
+
+    #[tauri::command]
+    pub fn delete_priority(
+        state: State<'_, AppState>,
+        id: String,
+        expected_version: i64,
+    ) -> Result<(), String> {
+        service(&state)?
+            .delete_priority(&id, expected_version)
+            .map_err(error_message)
+    }
+    #[tauri::command]
     pub fn list_blocks(
         state: State<'_, AppState>,
         task_id: String,
@@ -151,11 +244,20 @@ pub fn run() {
             commands::create_task,
             commands::complete_task,
             commands::delete_task,
+            commands::reopen_task,
             commands::start_work,
             commands::finish_work,
             commands::list_blocks,
             commands::block_task,
-            commands::unblock_task
+            commands::unblock_task,
+            commands::list_workspaces,
+            commands::create_workspace,
+            commands::rename_workspace,
+            commands::delete_workspace,
+            commands::list_priorities,
+            commands::create_priority,
+            commands::update_priority,
+            commands::delete_priority
         ])
         .run(tauri::generate_context!())
         .expect("运行 CardHannis 时发生错误");

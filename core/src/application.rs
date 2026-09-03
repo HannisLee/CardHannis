@@ -22,6 +22,8 @@ impl TaskService {
             estimated_active_minutes: command.estimated_active_minutes,
             sort_order: command.sort_order,
             created_device_id: command.created_device_id,
+            workspace_id: command.workspace_id,
+            priority_id: command.priority_id,
         })
     }
 
@@ -39,6 +41,8 @@ impl TaskService {
             command.review_notes.as_deref(),
             command.estimated_active_minutes,
             command.sort_order,
+            command.workspace_id.as_deref(),
+            command.priority_id.as_deref(),
             now(),
         )
     }
@@ -51,6 +55,10 @@ impl TaskService {
     pub fn complete(&self, id: &str, expected_version: i64) -> Result<Task> {
         self.store
             .set_status(id, expected_version, TaskStatus::Completed, now())
+    }
+
+    pub fn reopen(&self, id: &str, expected_version: i64) -> Result<Task> {
+        self.store.reopen_task(id, expected_version, now())
     }
 
     pub fn delete(&self, id: &str, expected_version: i64) -> Result<()> {
@@ -86,6 +94,54 @@ impl TaskService {
     pub fn sessions(&self, task_id: &str) -> Result<Vec<WorkSession>> {
         self.store.list_sessions(task_id)
     }
+
+    // ===== 工作区 =====
+    pub fn create_workspace(&self, name: &str) -> Result<Workspace> {
+        self.store.create_workspace(name, now())
+    }
+    pub fn workspaces(&self, include_deleted: bool) -> Result<Vec<Workspace>> {
+        self.store.list_workspaces(include_deleted)
+    }
+    pub fn workspace(&self, id: &str) -> Result<Option<Workspace>> {
+        self.store.get_workspace(id)
+    }
+    pub fn rename_workspace(
+        &self,
+        id: &str,
+        expected_version: i64,
+        name: &str,
+    ) -> Result<Workspace> {
+        self.store
+            .rename_workspace(id, expected_version, name, now())
+    }
+    pub fn delete_workspace(&self, id: &str, expected_version: i64) -> Result<()> {
+        self.store
+            .soft_delete_workspace(id, expected_version, now())
+    }
+
+    // ===== 优先级分级 =====
+    pub fn create_priority(&self, name: &str, color: Option<&str>) -> Result<Priority> {
+        self.store.create_priority(name, color, now())
+    }
+    pub fn priorities(&self, include_deleted: bool) -> Result<Vec<Priority>> {
+        self.store.list_priorities(include_deleted)
+    }
+    pub fn priority(&self, id: &str) -> Result<Option<Priority>> {
+        self.store.get_priority(id)
+    }
+    pub fn update_priority(
+        &self,
+        id: &str,
+        expected_version: i64,
+        name: &str,
+        color: Option<&str>,
+    ) -> Result<Priority> {
+        self.store
+            .update_priority(id, expected_version, name, color, now())
+    }
+    pub fn delete_priority(&self, id: &str, expected_version: i64) -> Result<()> {
+        self.store.soft_delete_priority(id, expected_version, now())
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -96,6 +152,10 @@ pub struct CreateTaskCommand {
     #[serde(default)]
     pub sort_order: i64,
     pub created_device_id: String,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub priority_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -106,6 +166,10 @@ pub struct UpdateTaskCommand {
     pub estimated_active_minutes: Option<i64>,
     #[serde(default)]
     pub sort_order: i64,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub priority_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -6,6 +6,10 @@ pub enum CoreError {
     Database(#[from] rusqlite::Error),
     #[error("任务不存在: {0}")]
     TaskNotFound(String),
+    #[error("工作区不存在: {0}")]
+    WorkspaceNotFound(String),
+    #[error("优先级不存在: {0}")]
+    PriorityNotFound(String),
     #[error("阻塞记录不存在: {0}")]
     BlockNotFound(String),
     #[error("工作会话不存在: {0}")]
