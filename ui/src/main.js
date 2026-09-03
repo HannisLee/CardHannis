@@ -4,7 +4,7 @@ import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import './style.css';
 
 const app = document.querySelector('#app');
-const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null };
+const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, sessionMinutesByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null };
 const COLLAPSE_KEY = 'cardha…e.v2';
 const OPACITY_KEY = 'cardhannis.sticky.opacity.v1';
 const DOCK_KEY = 'cardhannis.sticky.dock.v1';
@@ -38,6 +38,21 @@ function parseEstimatedMinutes(hours) {
   const value = Number(hours);
   return Number.isFinite(value) && value >= 0 ? Math.round(value * 60) : null;
 }
+function fmtDateTime(value) {
+  if (!value) return '—';
+  const d = new Date(value);
+  const q = (n) => String(n).padStart(2, '0');
+  return `${q(d.getMonth() + 1)}-${q(d.getDate())} ${q(d.getHours())}:${q(d.getMinutes())}`;
+}
+function fmtDuration(minutes) {
+  if (!minutes) return '—';
+  if (minutes < 60) return `${minutes}m`;
+  const h = minutes / 60;
+  return `${Number.isInteger(h) ? h : h.toFixed(1)}h`;
+}
+function prioName(task) {
+  return (state.prios.find((p) => p.id === task.priority_id) || {}).name || '—';
+}
 function pillInfo(task) {
   if (task.is_blocked) return { cls: 'blocked', label: '阻塞' };
   return { in_progress: { cls: 'in_progress', label: '进行' }, completed: { cls: 'completed', label: '完成' } }[task.status] || { cls: 'pending', label: '待办' };
@@ -66,9 +81,12 @@ function row(task) {
       <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">${ICONS.block}</button>
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">${ICONS.done}</button>`;
   }
+  const statusSlot = done
+    ? `<span class="done-meta" title="分级 · 完成时间 · 实际工作时间">${escapeHtml(prioName(task))} · ${fmtDateTime(task.completed_at)} · ${fmtDuration(state.sessionMinutesByTask[task.id])}</span>`
+    : `<span class="pill ${pill.cls}">${pill.label}</span>`;
   return `<div class="row ${done ? 'done' : ''}" data-id="${task.id}" data-version="${task.version}" title="${tip}">
     <span class="rt">${escapeHtml(task.title)}</span>
-    <span class="pill ${pill.cls}">${pill.label}</span>
+    ${statusSlot}
     <span class="ra">${actions}</span>
   </div>`;
 }
@@ -98,7 +116,6 @@ function render() {
         const open = w.id === 'done' ? state.tasks.filter((t) => t.workspace_id === w.id).length : state.tasks.filter((t) => t.workspace_id === w.id && t.status !== 'completed').length;
         return `<button class="ws-tab ${w.id === state.activeWs ? 'active' : ''}" data-ws="${w.id}" type="button">${escapeHtml(w.name)}<b>${open}</b>${w.builtin ? '' : `<span class="ws-x" data-ws-del="${w.id}" data-version="${w.version}" title="删除工作区">×</span>`}</button>`;
       }).join('')}<button class="ws-tool" id="ws-add" title="新建工作区" type="button">＋</button></div>
-      <button class="ws-tool" id="collapse-all" title="全部收起/展开" type="button">▤</button>
       <button class="ws-tool" id="add-prio" title="添加分级" type="button">＋P</button>
     </nav>
     <div class="win-body">
@@ -169,7 +186,6 @@ function render() {
   document.querySelector('#btn-close')?.addEventListener('click', () => theWindow()?.close());
   document.querySelector('#ws-add')?.addEventListener('click', addWorkspace);
   document.querySelector('#add-prio')?.addEventListener('click', addPriority);
-  document.querySelector('#collapse-all')?.addEventListener('click', toggleCollapseAll);
   document.querySelectorAll('.ws-tab').forEach((tab) => tab.addEventListener('click', (e) => {
     const del = e.target.closest('[data-ws-del]');
     if (del) { removeWorkspace(del.dataset.wsDel, Number(del.dataset.version)); return; }
@@ -241,13 +257,6 @@ async function handleGroupTool(button) {
       await loadMeta(); render(); notify('分级已删除');
     }
   } catch (error) { notify(error.message || '操作失败'); }
-}
-function toggleCollapseAll() {
-  const keys = state.prios.map((p) => `${state.activeWs}:${p.id}`);
-  const anyOpen = keys.some((k) => !collapsed[k]);
-  keys.forEach((k) => { collapsed[k] = anyOpen; });
-  localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed));
-  render();
 }
 
 function openTaskDialog(prioId) {
@@ -394,6 +403,7 @@ async function loadTasks() {
   state.tasks = await call('list_tasks');
   state.blocksByTask = {};
   state.sessionsByTask = {};
+  state.sessionMinutesByTask = {};
   await Promise.all(state.tasks.filter((task) => task.is_blocked).map(async (task) => {
     const blocks = await call('list_blocks', { taskId: task.id });
     const active = blocks.find((block) => !block.ended_at);
@@ -403,6 +413,11 @@ async function loadTasks() {
     const sessions = await call('list_sessions', { taskId: task.id });
     const active = sessions.find((session) => !session.ended_at);
     if (active) state.sessionsByTask[task.id] = active;
+  }));
+  await Promise.all(state.tasks.filter((task) => task.status === 'completed').map(async (task) => {
+    const sessions = await call('list_sessions', { taskId: task.id });
+    const minutes = sessions.filter((x) => x.ended_at).reduce((acc, x) => acc + Math.max(0, Math.round((Date.parse(x.ended_at) - Date.parse(x.started_at)) / 60000)), 0);
+    state.sessionMinutesByTask[task.id] = minutes;
   }));
   render();
 }

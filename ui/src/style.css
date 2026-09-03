@@ -118,3 +118,6 @@ dialog::backdrop { background: rgba(40, 46, 38, .3); backdrop-filter: blur(2px);
 .win-tools button { display: grid; place-items: center; }
 .win-brand { display: inline-flex; align-items: center; gap: 5px; }
 .win-brand svg { width: 12px; height: 12px; }
+
+/* 已完成行元信息 */
+.done-meta { flex: none; max-width: 150px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: ui-monospace, Menlo, monospace; font-size: 8.5px; letter-spacing: .03em; color: #a0a299; }
