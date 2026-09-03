@@ -37,6 +37,12 @@
     "category": "Productivity",
     "shortDescription": "轻量任务与工作会话管理",
     "longDescription": "CardHannis 是一个支持任务阻塞历史和工作会话的本地优先任务工具。",
-    "icon": []
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
   }
 }

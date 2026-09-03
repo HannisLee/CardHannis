@@ -11,6 +11,16 @@ const DOCK_KEY = 'cardhannis.sticky.dock.v1';
 let collapsed = {};
 try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch {}
 let pinned = true;
+const ICONS = {
+  logo: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><g transform="translate(32 0)"><path fill="currentColor" d="M48 32C21.5 32 0 53.5 0 80v352c0 26.5 21.5 48 48 48h352c26.5 0 48-21.5 48-48V80c0-26.5-21.5-48-48-48zm16 64h106.668v53.334h-53.334v213.332H224V416H64zm160 0h160v320H277.332v-53.334h53.334V149.334H224z"/></g></svg>',
+  start: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M6 18V6h2v12zm4 0l10-6l-10-6z"/></svg>',
+  pause: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M9 3a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm8 0a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/></svg>',
+  done: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m9 10l3.258 2.444a1 1 0 0 0 1.353-.142L20 5"/><path d="M21 12a9 9 0 1 1-6.67-8.693"/></g></svg>',
+  block: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m15 2l6 6m0-6l-6 6"/><circle cx="6" cy="19" r="3"/><path d="M12 5H8.5a3.5 3.5 0 1 0 0 7h7a3.5 3.5 0 1 1 0 7H12"/></g></svg>',
+  add: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5.25v13.5M18.75 12H5.25"/></svg>',
+  pin: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" transform="scale(0.6667)"><path d="M30 30H6V6h16V4H6a2 2 0 0 0-2 2v24a2 2 0 0 0 2 2h24a2 2 0 0 0 2-2V14h-2Z"/><path d="m33.57 9.33l-7-7a1 1 0 0 0-1.41 1.41l1.38 1.38l-4 4c-2-.87-4.35.14-5.92 1.68l-.72.71l3.54 3.54l-3.67 3.67l1.41 1.41l3.67-3.67L24.37 20l.71-.72c1.54-1.57 2.55-3.91 1.68-5.92l4-4l1.38 1.38a1 1 0 1 0 1.41-1.41Z"/></g></svg>',
+  settings: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2"/><circle cx="12" cy="12" r="3"/></g></svg>',
+};
 const PRIO_PALETTE = ['#5c7699', '#7a5ea6', '#3d735e', '#a0632f', '#8a5a7a', '#4e7d8a'];
 
 function isTauri() { return Boolean(window.__TAURI_INTERNALS__); }
@@ -46,15 +56,15 @@ function row(task) {
     actions = `<button class="nb" data-action="reopen" ${d} ${v} title="重新打开" type="button">↺</button>`;
   } else if (task.is_blocked) {
     actions = `${block ? `<button class="nb" data-action="unblock" data-block-id="${block.id}" data-block-version="${block.version}" title="解除阻塞 → 等待中" type="button">⏏</button>` : ''}
-      <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
+      <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">${ICONS.done}</button>`;
   } else if (task.status === 'in_progress') {
-    actions = `<button class="nb" data-action="pause" ${d} ${v} title="暂停（回到待办）" type="button">⏯</button>
-      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">⊘</button>
-      <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
+    actions = `<button class="nb" data-action="pause" ${d} ${v} title="暂停（回到待办）" type="button">${ICONS.pause}</button>
+      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">${ICONS.block}</button>
+      <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">${ICONS.done}</button>`;
   } else {
-    actions = `<button class="nb" data-action="work" ${d} title="开始工作（计时）" type="button">▶</button>
-      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">⊘</button>
-      <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
+    actions = `<button class="nb" data-action="work" ${d} title="开始工作（计时）" type="button">${ICONS.start}</button>
+      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">${ICONS.block}</button>
+      <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">${ICONS.done}</button>`;
   }
   return `<div class="row ${done ? 'done' : ''}" data-id="${task.id}" data-version="${task.version}" title="${tip}">
     <span class="rt">${escapeHtml(task.title)}</span>
@@ -74,11 +84,11 @@ function render() {
   const unsorted = wsTasks.filter((t) => !state.prios.some((p) => p.id === t.priority_id));
   app.innerHTML = `<div class="win"><div class="win-sheet">
     <header class="win-bar">
-      <span class="win-brand">🗒 CardHannis</span>
+      <span class="win-brand">${ICONS.logo}CardHannis</span>
       <div class="win-tools">
-        <button id="btn-new" title="新建任务" type="button">＋</button>
-        <button id="btn-settings" title="设置" type="button">⚙</button>
-        <button id="btn-pin" class="${pinned ? 'on' : ''}" title="切换窗口置顶" type="button">📌</button>
+        <button id="btn-new" title="新建任务" type="button">${ICONS.add}</button>
+        <button id="btn-settings" title="设置" type="button">${ICONS.settings}</button>
+        <button id="btn-pin" class="${pinned ? 'on' : ''}" title="切换窗口置顶" type="button">${ICONS.pin}</button>
         <button id="btn-min" title="最小化" type="button">−</button>
         <button id="btn-close" title="关闭" type="button">✕</button>
       </div>

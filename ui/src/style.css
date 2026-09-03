@@ -110,3 +110,10 @@ dialog::backdrop { background: rgba(40, 46, 38, .3); backdrop-filter: blur(2px);
 .set-check { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #6b6f63; }
 .set-check input { accent-color: #325549; }
 .win-sheet { transition: opacity .15s ease; }
+
+/* 图标尺寸对齐 */
+.nb { display: grid; place-items: center; }
+.nb svg, .win-tools button svg { width: 13px; height: 13px; display: block; }
+.win-tools button { display: grid; place-items: center; }
+.win-brand { display: inline-flex; align-items: center; gap: 5px; }
+.win-brand svg { width: 12px; height: 12px; }
