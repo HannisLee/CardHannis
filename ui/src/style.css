@@ -10,7 +10,7 @@ h2, h3, p { margin: 0; }
 .win-sheet { flex: 1; display: flex; flex-direction: column; border-radius: 12px; background: #fbf8ef; box-shadow: 0 8px 24px rgba(45, 52, 44, .22), inset 0 0 0 1px rgba(122, 112, 82, .18); overflow: hidden; }
 
 /* 标题条（可拖动） */
-.win-bar { display: flex; align-items: center; gap: 8px; padding: 7px 6px 7px 11px; background: #325549; color: #eef4ec; user-select: none; -webkit-user-select: none; flex: none; }
+.win-bar { display: flex; align-items: center; gap: 8px; padding: 7px 6px 7px 11px; background: #325549; color: #eef4ec; user-select: none; -webkit-user-select: none; flex: none; cursor: grab; }
 .win-brand { font-size: 11px; font-weight: 800; letter-spacing: .01em; }
 .win-tools { margin-left: auto; display: flex; gap: 3px; }
 .win-tools button { width: 22px; height: 22px; border: 0; border-radius: 6px; background: rgba(255, 255, 255, .1); color: #d9e4d9; font-size: 11px; line-height: 1; }

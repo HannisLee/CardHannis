@@ -7,6 +7,7 @@ const app = document.querySelector('#app');
 const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null };
 const COLLAPSE_KEY = 'cardha…e.v2';
 const OPACITY_KEY = 'cardhannis.sticky.opacity.v1';
+const DOCK_KEY = 'cardhannis.sticky.dock.v1';
 let collapsed = {};
 try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch {}
 let pinned = true;
@@ -48,11 +49,11 @@ function row(task) {
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
   } else if (task.status === 'in_progress') {
     actions = `<button class="nb" data-action="pause" ${d} ${v} title="暂停（回到待办）" type="button">⏯</button>
-      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">🔒</button>
+      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">⊘</button>
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
   } else {
     actions = `<button class="nb" data-action="work" ${d} title="开始工作（计时）" type="button">▶</button>
-      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">🔒</button>
+      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">⊘</button>
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
   }
   return `<div class="row ${done ? 'done' : ''}" data-id="${task.id}" data-version="${task.version}" title="${tip}">
@@ -72,11 +73,10 @@ function render() {
   const groups = state.prios.map((p, i) => ({ p, color: prioColor(p, i), tasks: wsTasks.filter((t) => t.priority_id === p.id) }));
   const unsorted = wsTasks.filter((t) => !state.prios.some((p) => p.id === t.priority_id));
   app.innerHTML = `<div class="win"><div class="win-sheet">
-    <header class="win-bar" data-tauri-drag-region>
-      <span class="win-brand" data-tauri-drag-region>🗒 CardHannis</span>
+    <header class="win-bar">
+      <span class="win-brand">🗒 CardHannis</span>
       <div class="win-tools">
         <button id="btn-new" title="新建任务" type="button">＋</button>
-        <button id="btn-dock" class="${docked ? 'on' : ''}" title="贴边自动收起" type="button">🧲</button>
         <button id="btn-settings" title="设置" type="button">⚙</button>
         <button id="btn-pin" class="${pinned ? 'on' : ''}" title="切换窗口置顶" type="button">📌</button>
         <button id="btn-min" title="最小化" type="button">−</button>
@@ -110,6 +110,7 @@ function render() {
     </div>
     <footer class="win-foot"><span class="dot"></span><span>${isTauri() ? '本地数据库' : '浏览器预览'}</span><span class="foot-right">${new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' })}</span></footer>
   </div>
+  </div>
   <dialog id="task-dialog">
     <form method="dialog" id="task-form" class="dlg-card">
       <h2>新任务</h2>
@@ -142,12 +143,11 @@ function render() {
       <div class="dlg-actions"><button class="ghost" type="button" data-close>关闭</button></div>
     </form>
   </dialog>
-  <div id="toast" class="toast" role="status"></div></div>`;
+  <div id="toast" class="toast" role="status"></div>`;
 
   document.querySelector('.win-sheet').style.opacity = (opacity / 100).toFixed(2);
   document.querySelector('#btn-new')?.addEventListener('click', () => openTaskDialog(null));
   document.querySelector('#btn-settings')?.addEventListener('click', () => document.querySelector('#settings-dialog').showModal());
-  document.querySelector('#btn-dock')?.addEventListener('click', toggleDock);
   document.querySelector('#opacity-range')?.addEventListener('input', (e) => {
     const v = Number(e.target.value);
     localStorage.setItem(OPACITY_KEY, String(v));
@@ -445,13 +445,14 @@ document.addEventListener('click', (e) => {
 });
 
 // ===== 贴边自动收起 =====
-let docked = false;
+let docked = localStorage.getItem(DOCK_KEY) !== '0';
 let dockEdge = null;
 let savedPos = null;
 
 async function setDock(on) {
+  localStorage.setItem(DOCK_KEY, on ? '1' : '0');
   const w = theWindow();
-  if (!w) { notify(on ? '（预览）不支持贴边' : '（预览）不支持贴边'); return; }
+  if (!w) { docked = on; render(); return; }
   docked = on;
   if (on) {
     await computeEdge(w);
@@ -485,7 +486,7 @@ async function computeEdge(w) {
 async function tuckWindow() {
   const w = theWindow();
   if (!w || !docked || savedPos === null) return;
-  if (document.querySelector('dialog[open]')) return;
+  if (dragState || document.querySelector('dialog[open]')) return;
   try {
     const mon = await w.currentMonitor();
     const size = await w.outerSize();
@@ -509,6 +510,36 @@ async function restoreWindow() {
 
 document.addEventListener('mouseleave', () => { if (docked) tuckWindow(); });
 document.addEventListener('mouseenter', () => { if (docked) restoreWindow(); });
+
+
+// ===== 自绘拖拽（避免 macOS 边缘半屏吸附） =====
+let dragState = null;
+document.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  const bar = e.target.closest('.win-bar');
+  if (!bar || e.target.closest('button')) return;
+  const w = theWindow();
+  if (!w) return;
+  e.preventDefault();
+  w.outerPosition().then((pos) => {
+    dragState = { sx: e.screenX, sy: e.screenY, px: pos.x, py: pos.y };
+  }).catch(() => {});
+});
+document.addEventListener('mousemove', (e) => {
+  if (!dragState) return;
+  const w = theWindow();
+  if (!w) return;
+  const scale = window.devicePixelRatio || 1;
+  w.setPosition(new PhysicalPosition(
+    Math.round(dragState.px + (e.screenX - dragState.sx) * scale),
+    Math.round(dragState.py + (e.screenY - dragState.sy) * scale),
+  )).catch(() => {});
+});
+document.addEventListener('mouseup', () => {
+  if (!dragState) return;
+  dragState = null;
+  if (docked) { const w = theWindow(); if (w) computeEdge(w); }
+});
 
 function notify(message) {
   const toast = document.querySelector('#toast');
