@@ -42,7 +42,7 @@ function row(task) {
   if (done) {
     actions = `<button class="nb" data-action="reopen" ${d} ${v} title="重新打开" type="button">↺</button>`;
   } else if (task.is_blocked) {
-    actions = `${block ? `<button class="nb" data-action="unblock" data-block-id="${block.id}" data-block-version="${block.version}" title="解除阻塞 → 等待中" type="button">▶⏏</button>` : ''}
+    actions = `${block ? `<button class="nb" data-action="unblock" data-block-id="${block.id}" data-block-version="${block.version}" title="解除阻塞 → 等待中" type="button">⏏</button>` : ''}
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
   } else if (task.status === 'in_progress') {
     actions = `<button class="nb" data-action="pause" ${d} ${v} title="暂停（回到待办）" type="button">⏯</button>
