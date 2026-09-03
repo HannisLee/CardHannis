@@ -1,10 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { PhysicalPosition } from '@tauri-apps/api/dpi';
 import './style.css';
 
 const app = document.querySelector('#app');
 const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null };
 const COLLAPSE_KEY = 'cardha…e.v2';
+const OPACITY_KEY = 'cardhannis.sticky.opacity.v1';
 let collapsed = {};
 try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch {}
 let pinned = true;
@@ -46,11 +48,11 @@ function row(task) {
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
   } else if (task.status === 'in_progress') {
     actions = `<button class="nb" data-action="pause" ${d} ${v} title="暂停（回到待办）" type="button">⏯</button>
-      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">⏸</button>
+      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">🔒</button>
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
   } else {
     actions = `<button class="nb" data-action="work" ${d} title="开始工作（计时）" type="button">▶</button>
-      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">⏸</button>
+      <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">🔒</button>
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">✓</button>`;
   }
   return `<div class="row ${done ? 'done' : ''}" data-id="${task.id}" data-version="${task.version}" title="${tip}">
@@ -61,6 +63,7 @@ function row(task) {
 }
 
 function render() {
+  const opacity = Number(localStorage.getItem(OPACITY_KEY) || 100);
   const ws = state.workspaces.find((w) => w.id === state.activeWs) || state.workspaces[0];
   if (ws) state.activeWs = ws.id;
   const wsTasks = state.tasks.filter((t) => t.workspace_id === (ws ? ws.id : null));
@@ -73,6 +76,8 @@ function render() {
       <span class="win-brand" data-tauri-drag-region>🗒 CardHannis</span>
       <div class="win-tools">
         <button id="btn-new" title="新建任务" type="button">＋</button>
+        <button id="btn-dock" class="${docked ? 'on' : ''}" title="贴边自动收起" type="button">🧲</button>
+        <button id="btn-settings" title="设置" type="button">⚙</button>
         <button id="btn-pin" class="${pinned ? 'on' : ''}" title="切换窗口置顶" type="button">📌</button>
         <button id="btn-min" title="最小化" type="button">−</button>
         <button id="btn-close" title="关闭" type="button">✕</button>
@@ -115,7 +120,7 @@ function render() {
         <label>分级<select name="priority" id="prio-select"></select></label>
         <label>工作区<select name="workspace" id="ws-select"></select></label>
       </div>
-      <div class="dlg-actions"><button class="ghost" value="cancel" type="submit">取消</button><button class="ok" value="default" type="submit">贴上</button></div>
+      <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" value="default" type="submit">贴上</button></div>
     </form>
   </dialog>
   <dialog id="block-dialog">
@@ -124,12 +129,32 @@ function render() {
       <p class="block-hint" id="block-task-title"></p>
       <label>原因<textarea name="reason" rows="2" required maxlength="300" placeholder="例如：等待接口文档"></textarea></label>
       <label>补充备注<textarea name="note" rows="2" placeholder="可选"></textarea></label>
-      <div class="dlg-actions"><button class="ghost" value="cancel" type="submit">取消</button><button class="ok" value="default" type="submit">确认阻塞</button></div>
+      <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" value="default" type="submit">确认阻塞</button></div>
+    </form>
+  </dialog>
+  <dialog id="settings-dialog">
+    <form method="dialog" class="dlg-card">
+      <h2>设置</h2>
+      <label>窗口不透明度 <span id="opacity-val">${opacity}%</span>
+        <input type="range" id="opacity-range" min="40" max="100" step="5" value="${opacity}" />
+      </label>
+      <label class="set-check"><input type="checkbox" id="dock-check" ${docked ? 'checked' : ''} /> 贴边自动收起（标题栏 🧲 同开关）</label>
+      <div class="dlg-actions"><button class="ghost" type="button" data-close>关闭</button></div>
     </form>
   </dialog>
   <div id="toast" class="toast" role="status"></div></div>`;
 
+  document.querySelector('.win-sheet').style.opacity = (opacity / 100).toFixed(2);
   document.querySelector('#btn-new')?.addEventListener('click', () => openTaskDialog(null));
+  document.querySelector('#btn-settings')?.addEventListener('click', () => document.querySelector('#settings-dialog').showModal());
+  document.querySelector('#btn-dock')?.addEventListener('click', toggleDock);
+  document.querySelector('#opacity-range')?.addEventListener('input', (e) => {
+    const v = Number(e.target.value);
+    localStorage.setItem(OPACITY_KEY, String(v));
+    document.querySelector('#opacity-val').textContent = `${v}%`;
+    document.querySelector('.win-sheet').style.opacity = (v / 100).toFixed(2);
+  });
+  document.querySelector('#dock-check')?.addEventListener('change', (e) => { setDock(e.target.checked); });
   document.querySelector('#btn-pin')?.addEventListener('click', togglePin);
   document.querySelector('#btn-min')?.addEventListener('click', () => theWindow()?.minimize());
   document.querySelector('#btn-close')?.addEventListener('click', () => theWindow()?.close());
@@ -279,8 +304,8 @@ function openBlockDialog(taskId) {
   state.blockingTaskId = taskId;
   const task = state.tasks.find((item) => item.id === taskId);
   const form = document.querySelector('#block-form');
-  form.reason.value = '';
-  form.note.value = '';
+  form.querySelector('[name="reason"]').value = '';
+  form.querySelector('[name="note"]').value = '';
   document.querySelector('#block-task-title').textContent = task ? task.title : '';
   document.querySelector('#block-dialog').showModal();
 }
@@ -288,10 +313,10 @@ function openBlockDialog(taskId) {
 async function handleBlockSubmit(event) {
   event.preventDefault();
   if (event.submitter && event.submitter.value === 'cancel') { event.currentTarget.closest('dialog').close(); return; }
-  const reason = event.currentTarget.reason.value.trim();
+  const reason = event.currentTarget.querySelector('[name="reason"]').value.trim();
   if (!reason || !state.blockingTaskId) return;
   try {
-    await call('block_task', { taskId: state.blockingTaskId, reason, note: event.currentTarget.note.value.trim() || null });
+    await call('block_task', { taskId: state.blockingTaskId, reason, note: event.currentTarget.querySelector('[name="note"]').value.trim() || null });
     event.currentTarget.closest('dialog').close();
     state.blockingTaskId = null;
     await loadTasks();
@@ -413,6 +438,77 @@ document.addEventListener('click', (e) => {
   if (ctxMenu && !ctxMenu.contains(e.target)) closeContextMenu();
 });
 window.addEventListener('blur', closeContextMenu);
+
+document.addEventListener('click', (e) => {
+  const closer = e.target.closest('[data-close]');
+  if (closer) closer.closest('dialog')?.close();
+});
+
+// ===== 贴边自动收起 =====
+let docked = false;
+let dockEdge = null;
+let savedPos = null;
+
+async function setDock(on) {
+  const w = theWindow();
+  if (!w) { notify(on ? '（预览）不支持贴边' : '（预览）不支持贴边'); return; }
+  docked = on;
+  if (on) {
+    await computeEdge(w);
+    notify('已开启贴边收起：鼠标移开窗口会收进屏幕边');
+  } else {
+    if (savedPos) { try { await w.setPosition(savedPos); } catch {} }
+    savedPos = null;
+    notify('已关闭贴边收起');
+  }
+  render();
+}
+function toggleDock() { setDock(!docked); }
+
+async function computeEdge(w) {
+  try {
+    const mon = await w.currentMonitor();
+    const pos = await w.outerPosition();
+    const size = await w.outerSize();
+    if (!mon) return;
+    const mx = mon.position.x, my = mon.position.y, mw = mon.size.width, mh = mon.size.height;
+    const dLeft = pos.x - mx;
+    const dRight = (mx + mw) - (pos.x + size.width);
+    const dTop = pos.y - my;
+    const dBottom = (my + mh) - (pos.y + size.height);
+    const min = Math.min(dLeft, dRight, dTop, dBottom);
+    dockEdge = min === dLeft ? 'left' : min === dRight ? 'right' : min === dTop ? 'top' : 'bottom';
+    savedPos = pos;
+  } catch {}
+}
+
+async function tuckWindow() {
+  const w = theWindow();
+  if (!w || !docked || savedPos === null) return;
+  if (document.querySelector('dialog[open]')) return;
+  try {
+    const mon = await w.currentMonitor();
+    const size = await w.outerSize();
+    if (!mon) return;
+    const scale = mon.scaleFactor || 1;
+    const sliver = Math.round(12 * scale);
+    let { x, y } = savedPos;
+    if (dockEdge === 'left') x = mon.position.x - size.width + sliver;
+    if (dockEdge === 'right') x = mon.position.x + mon.size.width - sliver;
+    if (dockEdge === 'top') y = mon.position.y - size.height + sliver;
+    if (dockEdge === 'bottom') y = mon.position.y + mon.size.height - sliver;
+    await w.setPosition(new PhysicalPosition(x, y));
+  } catch {}
+}
+
+async function restoreWindow() {
+  const w = theWindow();
+  if (!w || !docked || savedPos === null) return;
+  try { await w.setPosition(savedPos); } catch {}
+}
+
+document.addEventListener('mouseleave', () => { if (docked) tuckWindow(); });
+document.addEventListener('mouseenter', () => { if (docked) restoreWindow(); });
 
 function notify(message) {
   const toast = document.querySelector('#toast');
