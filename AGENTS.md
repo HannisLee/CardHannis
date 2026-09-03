@@ -89,6 +89,8 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - Web API 的请求模型通常将 `expected_version` 放在 JSON body（更新）或 query 参数（状态变更/删除/解除阻塞）；新增路由应保持现有 REST 风格和错误映射。
 - `web/app/static/` 是 Web 原型独立静态 UI；它与 `ui/src/` 不是同一套构建入口，修改一端不会自动同步另一端。
 - Web 首页（`web/app/static/index.html`）当前为工作区布局 Demo：mock 数据存于浏览器 localStorage，未调用 `/api/*`；原表单式 WebUI（旧 `index.html` + `app.js`）已删除，Supabase 设置界面待迁回新版布局。
+- 桌面端（`ui/src`）当前为 280×400 置顶便签小窗：单行条目（标题+状态+行内按钮），按状态分组可收起；已接入工作区/分级/等待中/重新打开的核心能力。
+- Supabase 同步目前仍只覆盖 `tasks/task_blocks/work_sessions` 三张表；`workspaces/priorities` 已进 `supabase-schema.sql`，但同步合并逻辑尚未包含它们。
 
 ## 领域不变量
 
@@ -105,6 +107,10 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 同一任务最多一个活动工作会话（由 `ux_work_sessions_one_active` 保证）。
 - 更新任务、删除任务、完成任务、结束阻塞等并发敏感操作必须校验 `expected_version`；冲突返回 `VersionConflict` 或 Web 层对应的错误。
 - 迁移 SQL 是跨实现共享契约。新增迁移时要考虑已有数据库升级路径，不要只修改当前建表 SQL 而破坏现有数据库。
+- 迁移通过 `schema_migrations` 表记录执行进度，Rust 与 Python 两端都按文件名顺序执行 `core/migrations/*.sql`；新增迁移直接加文件，不要改历史文件。
+- 任务状态共四态：`pending` / `in_progress` / `waiting`（等待中，解除阻塞后的默认落点）/ `completed`；阻塞不是状态，由未结束的阻塞记录派生。
+- 已完成任务可通过 `reopen`（Rust `TaskService::reopen` / Web `POST /api/tasks/{id}/reopen`）回到 `pending`。
+- `workspaces`、`priorities` 是用户可管理实体（增/改名/软删）；删除前提：工作区无任务、分级无任务且至少保留一个分级。任务的 `workspace_id`/`priority_id` 可为空（旧数据由迁移回填为 `daily`/`P1`）。
 
 ## 常用命令
 

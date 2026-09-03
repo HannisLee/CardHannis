@@ -111,6 +111,72 @@ def start_work(task_id: str, input: models.StartWorkInput, request: Request):
         raise fail(error) from error
 
 
+@app.post("/api/tasks/{task_id}/reopen", response_model=models.Task)
+def reopen_task(task_id: str, expected_version: int, request: Request):
+    try:
+        return normalize_task(store(request).reopen_task(task_id, expected_version, models.utc_now_iso()))
+    except StoreError as error:
+        raise fail(error) from error
+
+
+@app.get("/api/workspaces", response_model=list[models.Workspace])
+def list_workspaces(request: Request):
+    return store(request).list_workspaces(False)
+
+
+@app.post("/api/workspaces", response_model=models.Workspace, status_code=201)
+def create_workspace(input: models.WorkspaceCreate, request: Request):
+    try:
+        return store(request).create_workspace(input.name, models.utc_now_iso())
+    except StoreError as error:
+        raise fail(error) from error
+
+
+@app.patch("/api/workspaces/{workspace_id}", response_model=models.Workspace)
+def rename_workspace(workspace_id: str, input: models.WorkspaceRename, request: Request):
+    try:
+        return store(request).rename_workspace(workspace_id, input.expected_version, input.name, models.utc_now_iso())
+    except StoreError as error:
+        raise fail(error) from error
+
+
+@app.delete("/api/workspaces/{workspace_id}", status_code=204)
+def delete_workspace(workspace_id: str, expected_version: int, request: Request):
+    try:
+        store(request).soft_delete_workspace(workspace_id, expected_version, models.utc_now_iso())
+    except StoreError as error:
+        raise fail(error) from error
+
+
+@app.get("/api/priorities", response_model=list[models.Priority])
+def list_priorities(request: Request):
+    return store(request).list_priorities(False)
+
+
+@app.post("/api/priorities", response_model=models.Priority, status_code=201)
+def create_priority(input: models.PriorityCreate, request: Request):
+    try:
+        return store(request).create_priority(input.name, input.color, models.utc_now_iso())
+    except StoreError as error:
+        raise fail(error) from error
+
+
+@app.patch("/api/priorities/{priority_id}", response_model=models.Priority)
+def update_priority(priority_id: str, input: models.PriorityUpdate, request: Request):
+    try:
+        return store(request).update_priority(priority_id, input.expected_version, input.name, input.color, models.utc_now_iso())
+    except StoreError as error:
+        raise fail(error) from error
+
+
+@app.delete("/api/priorities/{priority_id}", status_code=204)
+def delete_priority(priority_id: str, expected_version: int, request: Request):
+    try:
+        store(request).soft_delete_priority(priority_id, expected_version, models.utc_now_iso())
+    except StoreError as error:
+        raise fail(error) from error
+
+
 @app.post("/api/sessions/{session_id}/end", response_model=models.WorkSession)
 def end_work(session_id: str, request: Request):
     try:

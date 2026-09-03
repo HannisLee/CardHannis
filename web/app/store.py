@@ -5,12 +5,13 @@ from typing import Any, Iterable, Optional
 
 from .models import TaskCreate, TaskUpdate
 
-INIT_SQL = (Path(__file__).resolve().parent.parent.parent / "core" / "migrations" / "0001_initial.sql").read_text()
+MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "core" / "migrations"
 
 TASK_COLUMNS = (
     "id,title,notes,review_notes,estimated_active_minutes,created_at,started_at,completed_at,status,"
     "sort_order,created_device_id,updated_at,deleted_at,version,"
-    "EXISTS (SELECT 1 FROM task_blocks b WHERE b.task_id = t.id AND b.ended_at IS NULL AND b.deleted_at IS NULL) AS is_blocked"
+    "EXISTS (SELECT 1 FROM task_blocks b WHERE b.task_id = t.id AND b.ended_at IS NULL AND b.deleted_at IS NULL) AS is_blocked,"
+    "workspace_id,priority_id"
 )
 
 BLOCK_COLUMNS = "id,task_id,started_at,ended_at,reason,note,created_at,updated_at,version,deleted_at"
@@ -30,8 +31,25 @@ class TaskStore:
         self._connection = sqlite3.connect(str(database_path), check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
-        self._connection.executescript(INIT_SQL)
+        self._apply_migrations()
         self._connection.commit()
+
+    def _apply_migrations(self) -> None:
+        """按文件名顺序执行 core/migrations/*.sql，用 schema_migrations 记录，避免重复执行。"""
+        self._connection.executescript(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY NOT NULL);"
+        )
+        applied = {row[0] for row in self._connection.execute("SELECT name FROM schema_migrations")}
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            if path.name in applied:
+                continue
+            self._connection.executescript(path.read_text())
+            self._connection.execute("INSERT OR IGNORE INTO schema_migrations (name) VALUES (?)", (path.name,))
+
+    @staticmethod
+    def _new_id() -> str:
+        import uuid
+        return str(uuid.uuid4())
 
     def _execute(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Cursor:
         with self._lock:
@@ -51,12 +69,13 @@ class TaskStore:
         task_id = new_id()
         self._execute(
             """
-            INSERT INTO tasks (id, title, notes, review_notes, estimated_active_minutes, sort_order, created_device_id, created_at, updated_at, version)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 1)
+            INSERT INTO tasks (id, title, notes, review_notes, estimated_active_minutes, sort_order, created_device_id, created_at, updated_at, version, workspace_id, priority_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, 1, ?9, ?10)
             """,
             (
                 task_id, input.title.strip(), input.notes, input.review_notes,
                 input.estimated_active_minutes, input.sort_order, input.created_device_id.strip(), created_at,
+                input.workspace_id, input.priority_id,
             ),
         )
         task = self.get_task(task_id)
@@ -94,10 +113,10 @@ class TaskStore:
         cursor = self._execute(
             """
             UPDATE tasks
-            SET title = ?1, notes = ?2, review_notes = ?3, estimated_active_minutes = ?4, sort_order = ?5, updated_at = ?6, version = version + 1
+            SET title = ?1, notes = ?2, review_notes = ?3, estimated_active_minutes = ?4, sort_order = ?5, workspace_id = ?9, priority_id = ?10, updated_at = ?6, version = version + 1
             WHERE id = ?7 AND version = ?8 AND deleted_at IS NULL
             """,
-            (input.title.strip(), input.notes, input.review_notes, input.estimated_active_minutes, input.sort_order, updated_at, task_id, input.expected_version),
+            (input.title.strip(), input.notes, input.review_notes, input.estimated_active_minutes, input.sort_order, updated_at, task_id, input.expected_version, input.workspace_id, input.priority_id),
         )
         if cursor.rowcount == 0:
             raise not_found_or_conflict("tasks", task_id)
@@ -119,6 +138,8 @@ class TaskStore:
         completed_at = None
         if status == "completed":
             completed_at = updated_at
+        elif status == "waiting":
+            started_at = started_at  # 等待中保留既有开始时间
         elif status != "pending":
             started_at = started_at or updated_at
         else:
@@ -197,7 +218,28 @@ class TaskStore:
             if block["version"] != expected_version:
                 raise StoreError("版本冲突")
             raise StoreError("阻塞已经解除")
+        # 解除阻塞后任务进入等待中（与 Rust 核心一致）
+        self._execute(
+            "UPDATE tasks SET status = 'waiting', updated_at = ?1, version = version + 1 WHERE id = (SELECT task_id FROM task_blocks WHERE id = ?2) AND deleted_at IS NULL AND status <> 'completed'",
+            (ended_at, block_id),
+        )
         return self.get_block(block_id) or {}
+
+    def reopen_task(self, task_id: str, expected_version: int, updated_at: str) -> dict[str, Any]:
+        task = self.get_task(task_id)
+        if task is None:
+            raise StoreError("任务不存在")
+        if task["deleted_at"]:
+            raise StoreError("已删除任务不能重新打开")
+        if task["version"] != expected_version:
+            raise StoreError("版本冲突")
+        if task["status"] != "completed":
+            raise StoreError("只有已完成任务可以重新打开")
+        self._execute(
+            "UPDATE tasks SET status = 'pending', completed_at = NULL, updated_at = ?1, version = version + 1 WHERE id = ?2 AND version = ?3 AND deleted_at IS NULL",
+            (updated_at, task_id, expected_version),
+        )
+        return self.get_task(task_id) or {}
 
     def list_blocks(self, task_id: str, include_deleted: bool = False) -> list[dict[str, Any]]:
         where = "" if include_deleted else "AND deleted_at IS NULL"
@@ -216,6 +258,106 @@ class TaskStore:
         row = self._fetchone(f"SELECT {SESSION_COLUMNS} FROM work_sessions WHERE id = ?1", (session_id,))
         return dict(row) if row else None
 
+
+
+    # ===== 工作区 =====
+    def create_workspace(self, name: str, created_at: str) -> dict[str, Any]:
+        name = (name or "").strip()
+        if not name:
+            raise StoreError("工作区名称不能为空")
+        row = self._fetchone("SELECT COALESCE(MAX(sort_order), -1) FROM workspaces WHERE deleted_at IS NULL")
+        sort_order = (row[0] if row else -1) + 1
+        workspace_id = self._new_id()
+        self._execute(
+            "INSERT INTO workspaces (id, name, sort_order, builtin, created_at, updated_at) VALUES (?1, ?2, ?3, 0, ?4, ?4)",
+            (workspace_id, name, sort_order, created_at),
+        )
+        return self.get_workspace(workspace_id) or {}
+
+    def list_workspaces(self, include_deleted: bool = False) -> list[dict[str, Any]]:
+        where = "" if include_deleted else "WHERE deleted_at IS NULL"
+        rows = self._fetchall(f"SELECT id,name,sort_order,builtin,created_at,updated_at,deleted_at,version FROM workspaces {where} ORDER BY sort_order, created_at")
+        return [dict(r) for r in rows]
+
+    def get_workspace(self, workspace_id: str) -> Optional[dict[str, Any]]:
+        row = self._fetchone("SELECT id,name,sort_order,builtin,created_at,updated_at,deleted_at,version FROM workspaces WHERE id = ?1 AND deleted_at IS NULL", (workspace_id,))
+        return dict(row) if row else None
+
+    def rename_workspace(self, workspace_id: str, expected_version: int, name: str, updated_at: str) -> dict[str, Any]:
+        name = (name or "").strip()
+        if not name:
+            raise StoreError("工作区名称不能为空")
+        cursor = self._execute(
+            "UPDATE workspaces SET name = ?1, updated_at = ?2, version = version + 1 WHERE id = ?3 AND version = ?4 AND deleted_at IS NULL",
+            (name, updated_at, workspace_id, expected_version),
+        )
+        if cursor.rowcount == 0:
+            if self.get_workspace(workspace_id) is None:
+                raise StoreError("工作区不存在")
+            raise StoreError("版本冲突")
+        return self.get_workspace(workspace_id) or {}
+
+    def soft_delete_workspace(self, workspace_id: str, expected_version: int, deleted_at: str) -> None:
+        count = self._fetchone("SELECT COUNT(*) FROM tasks WHERE workspace_id = ?1 AND deleted_at IS NULL", (workspace_id,))[0]
+        if count:
+            raise StoreError("工作区还有任务，先移走再删除")
+        cursor = self._execute(
+            "UPDATE workspaces SET deleted_at = ?1, updated_at = ?1, version = version + 1 WHERE id = ?2 AND version = ?3 AND deleted_at IS NULL",
+            (deleted_at, workspace_id, expected_version),
+        )
+        if cursor.rowcount == 0:
+            raise StoreError("工作区不存在")
+
+    # ===== 优先级分级 =====
+    def create_priority(self, name: str, color: Optional[str], created_at: str) -> dict[str, Any]:
+        name = (name or "").strip()
+        if not name:
+            raise StoreError("分级名称不能为空")
+        row = self._fetchone("SELECT COALESCE(MAX(sort_order), -1) FROM priorities WHERE deleted_at IS NULL")
+        sort_order = (row[0] if row else -1) + 1
+        priority_id = self._new_id()
+        self._execute(
+            "INSERT INTO priorities (id, name, color, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            (priority_id, name, color, sort_order, created_at),
+        )
+        return self.get_priority(priority_id) or {}
+
+    def list_priorities(self, include_deleted: bool = False) -> list[dict[str, Any]]:
+        where = "" if include_deleted else "WHERE deleted_at IS NULL"
+        rows = self._fetchall(f"SELECT id,name,color,sort_order,created_at,updated_at,deleted_at,version FROM priorities {where} ORDER BY sort_order, created_at")
+        return [dict(r) for r in rows]
+
+    def get_priority(self, priority_id: str) -> Optional[dict[str, Any]]:
+        row = self._fetchone("SELECT id,name,color,sort_order,created_at,updated_at,deleted_at,version FROM priorities WHERE id = ?1 AND deleted_at IS NULL", (priority_id,))
+        return dict(row) if row else None
+
+    def update_priority(self, priority_id: str, expected_version: int, name: str, color: Optional[str], updated_at: str) -> dict[str, Any]:
+        name = (name or "").strip()
+        if not name:
+            raise StoreError("分级名称不能为空")
+        cursor = self._execute(
+            "UPDATE priorities SET name = ?1, color = ?2, updated_at = ?3, version = version + 1 WHERE id = ?4 AND version = ?5 AND deleted_at IS NULL",
+            (name, color, updated_at, priority_id, expected_version),
+        )
+        if cursor.rowcount == 0:
+            if self.get_priority(priority_id) is None:
+                raise StoreError("优先级不存在")
+            raise StoreError("版本冲突")
+        return self.get_priority(priority_id) or {}
+
+    def soft_delete_priority(self, priority_id: str, expected_version: int, deleted_at: str) -> None:
+        count = self._fetchone("SELECT COUNT(*) FROM tasks WHERE priority_id = ?1 AND deleted_at IS NULL", (priority_id,))[0]
+        if count:
+            raise StoreError("该分级还有任务，先移走再删除")
+        remaining = self._fetchone("SELECT COUNT(*) FROM priorities WHERE id <> ?1 AND deleted_at IS NULL", (priority_id,))[0]
+        if remaining == 0:
+            raise StoreError("至少要保留一个分级")
+        cursor = self._execute(
+            "UPDATE priorities SET deleted_at = ?1, updated_at = ?1, version = version + 1 WHERE id = ?2 AND version = ?3 AND deleted_at IS NULL",
+            (deleted_at, priority_id, expected_version),
+        )
+        if cursor.rowcount == 0:
+            raise StoreError("优先级不存在")
 
     def export_sync_records(self) -> dict[str, list[dict[str, Any]]]:
         """导出同步所需的真实字段，不包含计算字段 is_blocked。"""

@@ -3,7 +3,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-TaskStatus = Literal["pending", "in_progress", "completed"]
+TaskStatus = Literal["pending", "in_progress", "waiting", "completed"]
 
 
 def utc_now_iso() -> str:
@@ -20,6 +20,8 @@ class TaskBase(BaseModel):
 
 class TaskCreate(TaskBase):
     created_device_id: str = Field(default="web-ui", min_length=1)
+    workspace_id: Optional[str] = None
+    priority_id: Optional[str] = None
 
 
 class TaskUpdate(BaseModel):
@@ -27,6 +29,8 @@ class TaskUpdate(BaseModel):
     notes: Optional[str] = None
     review_notes: Optional[str] = None
     estimated_active_minutes: Optional[int] = Field(default=None, ge=0)
+    workspace_id: Optional[str] = None
+    priority_id: Optional[str] = None
     sort_order: int = 0
     expected_version: int
 
@@ -44,6 +48,8 @@ class Task(TaskBase):
     deleted_at: Optional[str] = None
     version: int
     is_blocked: bool
+    workspace_id: Optional[str] = None
+    priority_id: Optional[str] = None
     active_block_id: Optional[str] = None
     active_block_version: Optional[int] = None
     active_block_reason: Optional[str] = None
@@ -83,3 +89,44 @@ class StartWorkInput(BaseModel):
 class SupabaseSettingsInput(BaseModel):
     url: str = ""
     api_key: str = ""
+
+class Workspace(BaseModel):
+    id: str
+    name: str
+    sort_order: int
+    builtin: bool
+    created_at: str
+    updated_at: str
+    deleted_at: Optional[str] = None
+    version: int
+
+
+class WorkspaceCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+
+
+class WorkspaceRename(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    expected_version: int
+
+
+class Priority(BaseModel):
+    id: str
+    name: str
+    color: Optional[str] = None
+    sort_order: int
+    created_at: str
+    updated_at: str
+    deleted_at: Optional[str] = None
+    version: int
+
+
+class PriorityCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=30)
+    color: Optional[str] = None
+
+
+class PriorityUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=30)
+    color: Optional[str] = None
+    expected_version: int

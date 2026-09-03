@@ -33,7 +33,7 @@ const SECTIONS = [
 ];
 function pillInfo(task) {
   if (task.is_blocked) return { cls: 'blocked', label: '阻塞' };
-  return { in_progress: { cls: 'in_progress', label: '进行' }, pending: { cls: 'pending', label: '待办' }, completed: { cls: 'completed', label: '完成' } }[task.status];
+  return { in_progress: { cls: 'in_progress', label: '进行' }, pending: { cls: 'pending', label: '待办' }, waiting: { cls: 'waiting', label: '等待' }, completed: { cls: 'completed', label: '完成' } }[task.status];
 }
 
 function note(task) {
@@ -45,10 +45,10 @@ function note(task) {
     <span class="rt">${escapeHtml(task.title)}</span>
     <span class="pill ${pill.cls}">${pill.label}</span>
     <span class="ra">
-      ${task.status === 'pending' && !task.is_blocked ? `<button class="nb" data-action="work" data-id="${task.id}" title="开始工作（计时）" type="button">▶</button>` : ''}
+      ${task.status === 'pending' || task.status === 'waiting' ? (!task.is_blocked ? `<button class="nb" data-action="work" data-id="${task.id}" title="开始工作（计时）" type="button">▶</button>` : '') : ''}
       ${!done && !task.is_blocked ? `<button class="nb" data-action="block" data-id="${task.id}" title="标记阻塞" type="button">⏸</button>` : ''}
       ${task.is_blocked && block ? `<button class="nb" data-action="unblock" data-block-id="${block.id}" data-block-version="${block.version}" title="解除阻塞" type="button">▶⏏</button>` : ''}
-      ${!done ? `<button class="nb ok" data-action="complete" data-id="${task.id}" data-version="${task.version}" title="完成任务" type="button">✓</button>` : ''}
+      ${!done ? `<button class="nb ok" data-action="complete" data-id="${task.id}" data-version="${task.version}" title="完成任务" type="button">✓</button>` : `<button class="nb" data-action="reopen" data-id="${task.id}" data-version="${task.version}" title="重新打开" type="button">↺</button>`}
       <button class="nb danger" data-action="delete" data-id="${task.id}" data-version="${task.version}" title="删除任务" type="button">⌫</button>
     </span>
   </div>`;
@@ -143,6 +143,7 @@ async function handleAction(button) {
   const version = Number(button.dataset.version);
   try {
     if (action === 'complete') { await call('complete_task', { id, expectedVersion: version }); notify('任务完成 ✦'); }
+    if (action === 'reopen') { await call('reopen_task', { id, expectedVersion: version }); notify('任务已重新打开'); }
     if (action === 'work') { await call('start_work', { taskId: id }); notify('开始计时 ▶'); }
     if (action === 'delete') { if (!window.confirm('确定删除这个任务吗？')) return; await call('delete_task', { id, expectedVersion: version }); notify('便签已撕掉'); }
     if (action === 'block') { openBlockDialog(id); return; }
@@ -184,7 +185,8 @@ async function previewCommand(command, args) {
   if (command === 'start_work') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.status = 'in_progress'; task.version += 1; } }
   if (command === 'list_blocks') { const task = state.tasks.find((item) => item.id === args.taskId); return task?.activeBlock ? [task.activeBlock] : []; }
   if (command === 'block_task') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.is_blocked = true; task.activeBlock = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null, reason: args.reason, note: args.note ?? null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, deleted_at: null }; } }
-  if (command === 'unblock_task') { for (const task of state.tasks) { if (task.activeBlock?.id === args.blockId) { task.is_blocked = false; delete task.activeBlock; } } }
+  if (command === 'unblock_task') { for (const task of state.tasks) { if (task.activeBlock?.id === args.blockId) { task.is_blocked = false; delete task.activeBlock; task.status = 'waiting'; task.version += 1; } } }
+  if (command === 'reopen_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { task.status = 'pending'; task.completed_at = null; task.version += 1; } }
 }
 
 const SAMPLES_KEY = 'cardha…es.v1';
