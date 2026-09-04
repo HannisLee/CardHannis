@@ -9,7 +9,7 @@ CardHannis Core 是一个跨平台 Rust 核心库，负责任务、重复阻塞�
 - `task_blocks` 独立保存每次阻塞，支持同一任务多次阻塞。
 - 同一任务最多一个未结束的阻塞和一个未结束的工作会话。
 - SQLite 外键、软删除、版本号乐观并发控制。
-- `TaskService` 作为 GUI、WebUI、CLI 共用的业务门面。
+- `TaskService` 作为 GUI、CLI 共用的业务门面。
 - 任务和记录类型实现 `Serialize` / `Deserialize`，便于 JSON API。
 
 ## 目录

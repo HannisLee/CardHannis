@@ -1,5 +1,5 @@
--- CardHannis Supabase schema
--- Run this in Supabase SQL Editor before using WebUI sync.
+-- CardHannis Supabase schema（预留件：Python 同步已退役，将来 Rust 重实现同步时启用）
+-- Run this in Supabase SQL Editor before implementing sync.
 -- This MVP uses the publishable/anon key. The policies below are intentionally
 -- open for a single trusted project; add Supabase Auth and per-user RLS before
 -- using this database for multiple users or sensitive data.

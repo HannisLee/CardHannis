@@ -10,13 +10,12 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 任务阻塞记录：一个任务可以有多段历史阻塞，但同时最多一个未结束阻塞。
 - 工作会话记录：一个任务同时最多一个未结束工作会话。
 - SQLite 持久化、内置迁移、软删除和基于 `version` 的乐观并发控制。
-- 共享业务边界：`cardhannis-core` 的 `TaskService` 供桌面端、Web API、CLI 等适配层使用。
+- 共享业务边界：`cardhannis-core` 的 `TaskService` 供桌面端、CLI 等适配层使用。
 
-项目目前包含三层/三种运行形态：
+项目目前包含两层/两种运行形态：
 
 1. **Rust 核心库**：`core/`，领域模型、业务服务和 SQLite 存储。
 2. **Tauri 2 桌面端**：`src-tauri/` + `ui/`，面向最终桌面应用。
-3. **FastAPI Web 原型**：`web/`，用于快速调整功能和验证 API；其 Python SQLite 存储直接复用 Rust 的迁移 SQL。
 
 根目录没有检测到 Git 元数据（执行 `git status` 会提示不是 Git 仓库），因此不要假设当前目录可用分支、提交或 Git hook 工作流。
 
@@ -39,19 +38,13 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 │   ├── src/lib.rs          # AppState、Tauri commands、数据库初始化
 │   ├── src/main.rs         # 桌面入口
 │   └── tauri.conf.json     # Tauri 2 构建、窗口和打包配置
-├── ui/
-│   ├── src/main.js         # 原生 DOM UI、Tauri invoke、浏览器预览回退
-│   ├── src/style.css       # 视觉样式
-│   └── dist/               # Vite 构建产物，不要直接编辑
-└── web/
-    ├── app/main.py        # FastAPI 路由和静态文件入口
-    ├── app/models.py      # Pydantic 请求/响应模型
-    ├── app/store.py       # Python SQLite 访问层
-    ├── app/static/         # Web 原型的 HTML/CSS/JS
-    └── README.md           # Web 原型启动说明
+└── ui/
+    ├── src/main.js         # 原生 DOM UI、Tauri invoke、浏览器预览回退
+    ├── src/style.css       # 视觉样式
+    └── dist/               # Vite 构建产物，不要直接编辑
 ```
 
-`target/`、`node_modules/`、`ui/node_modules/`、`web/.venv/` 和 Python `__pycache__/` 属于生成/环境目录，不应手工修改或作为源码依据。
+`target/`、`node_modules/`、`ui/node_modules/` 属于生成/环境目录，不应手工修改或作为源码依据。
 
 ## 架构与边界
 
@@ -66,31 +59,19 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 
 ### Tauri 桌面端（`src-tauri/` + `ui/`）
 
-- `src-tauri/src/lib.rs` 的 `shared_data_dir()` 与 `web/app/main.py` 的 `_default_db_path()` 用同一套跨平台规则解析共享数据库路径（macOS `~/Library/Application Support/CardHannis`、Windows `%APPDATA%/CardHannis`、Linux `~/.local/share/CardHannis`），双端不分叉；SQLite 文件平台无关，可整文件跨机器/跨系统无损迁移。
+- `src-tauri/src/lib.rs` 的 `shared_data_dir()` 用跨平台规则解析数据目录（macOS `~/Library/Application Support/CardHannis`、Windows `%APPDATA%/CardHannis`、Linux `~/.local/share/CardHannis`，兜底 Tauri `app_data_dir`）；SQLite 文件平台无关，可整文件跨机器/跨系统无损迁移。
 - AppState 以 `Mutex<TaskService>` 注入 Tauri state；command 返回可序列化领域对象，错误当前转换为字符串。
 - `src-tauri/tauri.conf.json` 中 `beforeDevCommand`/`beforeBuildCommand` 分别调用根级 `npm run ui:dev`/`npm run ui:build`，前端产物目录为 `ui/dist`。
 - `ui/src/main.js` 使用 `@tauri-apps/api/core` 的 `invoke`。不在 Tauri 中运行时，会进入浏览器预览模式（内存 state），只适合 UI 快速预览，不提供持久化。
 - 前端当前为 Vite + 原生 JavaScript/DOM，没有 React/Vue 等框架；沿用现有事件绑定和 `escapeHtml` 防注入方式。
 - `ui/dist` 是构建输出，应通过 `npm run ui:build` 生成，不直接改动其中的压缩文件。
 
-### Web 原型（`web/`）
+### Supabase（已退役）
 
-### Supabase 同步
+- Python 原型（`web/`）及其 Supabase 同步已于 2026-09-04 删除；桌面端为唯一运行形态。
+- `supabase-schema.sql` 保留为远端 schema 预留件，将来若在 Rust 侧重实现同步时启用；届时必须接入 Supabase Auth 与按用户 RLS，不能沿用旧的公开读写策略。
 
-- `web/app/sync.py` 通过 Supabase REST API 访问远端 `tasks`、`task_blocks`、`work_sessions` 表，不在仓库中保存密钥。
-- `supabase-schema.sql` 是远端初始化脚本；修改核心 schema 时要同步检查该文件。
-- WebUI 的设置接口把 Project URL 和 publishable/anon key 保存到本机应用数据目录的 `supabase.json`，文件权限设为 `0600`。不要使用或提交 `service_role` key。
-- 同步采用本地/远端按时间戳合并，再 upsert 回两端；冲突处理和活动阻塞/工作会话约束见 `web/app/sync.py`。
-- 当前 SQL policy 为个人原型的宽松策略。多人或敏感数据场景必须接入 Supabase Auth 并按用户配置 RLS，不能直接沿用公开读写策略。
-
-- 使用 FastAPI + Uvicorn + Pydantic + Python 标准库 `sqlite3`。
-- `web/app/store.py` 读取 `core/migrations/0001_initial.sql`，因此修改 schema 时必须确保 Rust 和 Python 两端都能初始化同一数据库。
-- 默认数据库为 `~/Library/Application Support/CardHannis/cardhannis.sqlite3`；可按 `web/README.md` 约定支持/实现 `CARDHANNIS_DB` 时同步更新文档和代码（当前代码以固定默认路径初始化）。
-- Web API 的请求模型通常将 `expected_version` 放在 JSON body（更新）或 query 参数（状态变更/删除/解除阻塞）；新增路由应保持现有 REST 风格和错误映射。
-- `web/app/static/` 是 Web 原型独立静态 UI；它与 `ui/src/` 不是同一套构建入口，修改一端不会自动同步另一端。
-- Web 首页（`web/app/static/index.html`）当前为工作区布局 Demo：mock 数据存于浏览器 localStorage，未调用 `/api/*`；原表单式 WebUI（旧 `index.html` + `app.js`）已删除，Supabase 设置界面待迁回新版布局。
-- 桌面端（`ui/src`）当前为 280×400 置顶便签小窗：单行条目（标题+状态+行内按钮），按状态分组可收起；已接入工作区/分级/等待中/重新打开的核心能力。
-- Supabase 同步目前仍只覆盖 `tasks/task_blocks/work_sessions` 三张表；`workspaces/priorities` 已进 `supabase-schema.sql`，但同步合并逻辑尚未包含它们。
+- 桌面端（`ui/src`）当前为 350×400 置顶便签小窗：横向工作区标签 + 纵向可收起分级 + 单行条目（标题+状态/元信息+行内按钮）；已完成任务归档到内置「已完成」工作区；贴边收起、透明度设置、自绘拖拽；应用内弹窗（webview 无原生 prompt/confirm）。
 
 ## 领域不变量
 
@@ -105,11 +86,11 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 任务被阻塞时不能开始新的工作；开始阻塞会结束该任务当前未结束的工作会话。
 - 同一任务最多一个活动阻塞（由 SQLite 部分唯一索引 `ux_task_blocks_one_active` 保证）。
 - 同一任务最多一个活动工作会话（由 `ux_work_sessions_one_active` 保证）。
-- 更新任务、删除任务、完成任务、结束阻塞等并发敏感操作必须校验 `expected_version`；冲突返回 `VersionConflict` 或 Web 层对应的错误。
+- 更新任务、删除任务、完成任务、结束阻塞等并发敏感操作必须校验 `expected_version`；冲突返回 `VersionConflict`。
 - 迁移 SQL 是跨实现共享契约。新增迁移时要考虑已有数据库升级路径，不要只修改当前建表 SQL 而破坏现有数据库。
 - 迁移通过 `schema_migrations` 表记录执行进度，Rust 与 Python 两端都按文件名顺序执行 `core/migrations/*.sql`；新增迁移直接加文件，不要改历史文件。
 - 任务状态共四态：`pending` / `in_progress` / `waiting`（等待中，解除阻塞后的默认落点）/ `completed`；阻塞不是状态，由未结束的阻塞记录派生。
-- 已完成任务可通过 `reopen`（Rust `TaskService::reopen` / Web `POST /api/tasks/{id}/reopen`）回到 `pending`。
+- 已完成任务可通过 `reopen`（`TaskService::reopen` / 桌面 `reopen_task` 命令）回到 `pending`。
 - `workspaces`、`priorities` 是用户可管理实体（增/改名/软删）；删除前提：工作区无任务、分级无任务且至少保留一个分级。任务的 `workspace_id`/`priority_id` 可为空（旧数据由迁移回填为 `daily`/`P1`）。
 
 ## 常用命令
@@ -132,29 +113,17 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
-Web 原型：
-
-```bash
-cd web
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -r requirements.txt
-python3 -m uvicorn app.main:app --reload --port 8321
-```
-
-然后访问 `http://127.0.0.1:8321`；FastAPI 文档为 `http://127.0.0.1:8321/docs`。从仓库根目录启动 Python 模块时，应确保 `web` 在 Python import path 中，例如先 `cd web`。
-
 ## 修改与验证规范
 
-1. **先判断修改层次**：业务规则改 `core/`；桌面桥接改 `src-tauri/`；桌面 UI 改 `ui/`；Web API/原型改 `web/`。跨端功能不要只改其中一端后声称功能已完整实现。
-2. **优先复用核心服务**：新桌面 command 应调用 `TaskService`，而不是直接拼接 SQL。Web 原型若暂时继续使用 Python store，需同步 Rust migration、字段、约束和 API 行为。
+1. **先判断修改层次**：业务规则改 `core/`；桌面桥接改 `src-tauri/`；桌面 UI 改 `ui/`。不要在适配层复制业务逻辑。
+2. **优先复用核心服务**：新桌面 command 应调用 `TaskService`，而不是直接拼接 SQL。
 3. **数据库变更**：修改 `core/migrations/` 后，同时检查 Rust `include_str!` 和 Python `read_text()` 的路径、字段顺序、索引、约束；必要时增加迁移文件或测试。
 4. **并发操作**：任何带版本的更新都必须使用调用方传入的旧版本，成功后由存储层递增 `version`；不要在前端静默覆盖版本冲突。
-5. **错误处理**：核心层使用 `CoreError`，不要吞掉错误；适配层再将其转成 Tauri `String` 或 FastAPI `HTTPException`。新增错误尽量复用现有语义。
+5. **错误处理**：核心层使用 `CoreError`，不要吞掉错误；适配层再将其转成 Tauri `String`。新增错误尽量复用现有语义。
 6. **前端输入**：动态插入 HTML 时继续转义用户可控文本；不要把标题、备注、阻塞原因直接拼入未转义的 HTML。
 7. **风格**：Rust 遵循 `rustfmt`；Python 保持类型注解和现有模块结构；前端保持 ES modules、原生 DOM 和当前无框架实现。避免为了小改动引入新框架或大规模重排。
-8. **生成文件**：不要手工编辑 `target/`、`ui/dist/`、`node_modules/`、`web/.venv/`、`__pycache__/` 或 Tauri 生成 schema；通过对应构建命令重新生成。
-9. **文档同步**：启动方式、数据库路径、API 字段或命令发生变化时，更新根目录 `README.md` 和/或 `web/README.md`。
+8. **生成文件**：不要手工编辑 `target/`、`ui/dist/`、`node_modules/` 或 Tauri 生成 schema；通过对应构建命令重新生成。
+9. **文档同步**：启动方式、数据库路径、命令发生变化时，更新根目录 `README.md` 和本文件。
 
 ## 测试重点
 
@@ -173,7 +142,7 @@ cargo check --workspace
 npm run ui:build
 ```
 
-若改动 Web API 或 Web 静态原型，当前仓库没有专门的 Python 测试脚本；应至少启动 Uvicorn 并手动/脚本验证相关 endpoint，同时确认 Rust 与 Python 对同一 SQLite schema 的行为一致。若新增测试框架或命令，请把命令写入对应 README 和本文件。
+若新增测试框架或命令，请把命令写入对应 README 和本文件。
 
 ## 提交前检查清单
 
