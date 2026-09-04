@@ -13,7 +13,19 @@ def normalize_task(task: dict) -> dict:
     task["is_blocked"] = bool(task.get("is_blocked"))
     return task
 
-DATABASE_PATH = Path(os.environ.get("CARDHANNIS_DB", Path.home() / "Library" / "Application Support" / "CardHannis" / "cardhannis.sqlite3"))
+def _default_db_path() -> Path:
+    """与桌面端 shared_data_dir 同一套跨平台规则。"""
+    import sys
+
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "CardHannis" / "cardhannis.sqlite3"
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA", str(Path.home())))
+        return base / "CardHannis" / "cardhannis.sqlite3"
+    return Path.home() / ".local" / "share" / "CardHannis" / "cardhannis.sqlite3"
+
+
+DATABASE_PATH = Path(os.environ.get("CARDHANNIS_DB", str(_default_db_path())))
 
 app = FastAPI(title="CardHannis WebUI", version="0.1.0")
 app.state.store = TaskStore(DATABASE_PATH)

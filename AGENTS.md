@@ -66,7 +66,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 
 ### Tauri 桌面端（`src-tauri/` + `ui/`）
 
-- `src-tauri/src/lib.rs` 在 Tauri setup 阶段使用 `~/Library/Application Support/CardHannis/cardhannis.sqlite3`（与 Web 原型共享同一数据库；刻意不用 Tauri 默认的 identifier 目录，避免双端数据分叉）。
+- `src-tauri/src/lib.rs` 的 `shared_data_dir()` 与 `web/app/main.py` 的 `_default_db_path()` 用同一套跨平台规则解析共享数据库路径（macOS `~/Library/Application Support/CardHannis`、Windows `%APPDATA%/CardHannis`、Linux `~/.local/share/CardHannis`），双端不分叉；SQLite 文件平台无关，可整文件跨机器/跨系统无损迁移。
 - AppState 以 `Mutex<TaskService>` 注入 Tauri state；command 返回可序列化领域对象，错误当前转换为字符串。
 - `src-tauri/tauri.conf.json` 中 `beforeDevCommand`/`beforeBuildCommand` 分别调用根级 `npm run ui:dev`/`npm run ui:build`，前端产物目录为 `ui/dist`。
 - `ui/src/main.js` 使用 `@tauri-apps/api/core` 的 `invoke`。不在 Tauri 中运行时，会进入浏览器预览模式（内存 state），只适合 UI 快速预览，不提供持久化。

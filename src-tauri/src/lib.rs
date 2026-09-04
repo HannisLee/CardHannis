@@ -7,6 +7,27 @@ pub struct AppState {
     pub device_id: String,
 }
 
+/// 桌面端与 Web 原型共用的数据目录。
+/// macOS: ~/Library/Application Support/CardHannis
+/// Windows: %APPDATA%/CardHannis
+/// Linux: ~/.local/share/CardHannis
+/// 兜底: Tauri app_data_dir
+fn shared_data_dir(app: &tauri::App) -> std::path::PathBuf {
+    use std::path::PathBuf;
+    if cfg!(target_os = "macos") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join("Library/Application Support/CardHannis");
+        }
+    } else if cfg!(target_os = "windows") {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            return PathBuf::from(appdata).join("CardHannis");
+        }
+    } else if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".local/share/CardHannis");
+    }
+    app.path().app_data_dir().expect("无法定位应用数据目录")
+}
+
 mod commands {
     use super::AppState;
     use cardhannis_core::{
@@ -239,12 +260,8 @@ mod commands {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            // 与 Web 原型共享同一数据库：~/Library/Application Support/CardHannis/
-            let data_dir = std::env::var_os("HOME")
-                .map(|home| {
-                    std::path::PathBuf::from(home).join("Library/Application Support/CardHannis")
-                })
-                .unwrap_or_else(|| app.path().app_data_dir().expect("无法定位应用数据目录"));
+            // 与 Web 原型共享同一数据库；路径解析跨平台（macOS/Windows/Linux 同一规则）
+            let data_dir = shared_data_dir(&app);
             fs::create_dir_all(&data_dir)?;
             let database_path = data_dir.join("cardhannis.sqlite3");
             let store = TaskStore::open(database_path).map_err(|error| error.to_string())?;
