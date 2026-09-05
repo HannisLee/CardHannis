@@ -1,10 +1,16 @@
 use cardhannis_core::{TaskService, TaskStore};
-use std::{fs, sync::Mutex};
-use tauri::Manager;
+use std::{fs, sync::Arc};
+use tauri::{
+    Manager,
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+};
 
 pub struct AppState {
-    pub service: Mutex<TaskService>,
+    pub service: Arc<TaskService>,
     pub device_id: String,
+    pub web: Arc<crate::web::WebConsoleState>,
+    pub tray: tauri::tray::TrayIcon,
 }
 
 /// 桌面端与 Web 原型共用的数据目录。
@@ -28,6 +34,19 @@ fn shared_data_dir(app: &tauri::App) -> std::path::PathBuf {
     app.path().app_data_dir().expect("无法定位应用数据目录")
 }
 
+mod web;
+
+fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+        } else {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }
+}
+
 mod commands {
     use super::AppState;
     use cardhannis_core::{
@@ -37,11 +56,8 @@ mod commands {
 
     fn service<'a>(
         state: &'a State<'_, AppState>,
-    ) -> Result<std::sync::MutexGuard<'a, cardhannis_core::TaskService>, String> {
-        state
-            .service
-            .lock()
-            .map_err(|_| "核心服务不可用".to_string())
+    ) -> Result<&'a cardhannis_core::TaskService, String> {
+        Ok(&state.service)
     }
 
     fn error_message(error: cardhannis_core::CoreError) -> String {
@@ -53,12 +69,21 @@ mod commands {
         service(&state)?.list(false).map_err(error_message)
     }
 
+    #[tauri::command]
+    pub async fn open_web_console(state: State<'_, AppState>) -> Result<(), String> {
+        state.web.start().await?;
+        let url = state.web.url();
+        webbrowser::open(&url).map_err(|error| format!("无法打开浏览器: {error}"))?;
+        Ok(())
+    }
+
     #[derive(Debug, serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct CreateTaskInput {
         pub title: String,
         pub notes: Option<String>,
         pub estimated_active_minutes: Option<i64>,
+        pub due_date: Option<String>,
         pub workspace_id: Option<String>,
         pub priority_id: Option<String>,
     }
@@ -70,6 +95,7 @@ mod commands {
                 title: input.title,
                 notes: input.notes,
                 estimated_active_minutes: input.estimated_active_minutes,
+                due_date: input.due_date,
                 sort_order: 0,
                 created_device_id: state.device_id.clone(),
                 workspace_id: input.workspace_id,
@@ -134,9 +160,10 @@ mod commands {
         state: State<'_, AppState>,
         block_id: String,
         expected_version: i64,
+        resolution_reason: Option<String>,
     ) -> Result<TaskBlock, String> {
         service(&state)?
-            .unblock(&block_id, expected_version)
+            .unblock(&block_id, expected_version, resolution_reason.as_deref())
             .map_err(error_message)
     }
 
@@ -264,19 +291,66 @@ pub fn run() {
             let data_dir = shared_data_dir(&app);
             fs::create_dir_all(&data_dir)?;
             let database_path = data_dir.join("cardhannis.sqlite3");
-            let store = TaskStore::open(database_path).map_err(|error| error.to_string())?;
-            let device_id = format!(
-                "macos-{}",
+            let store =
+                TaskStore::open(database_path.clone()).map_err(|error| error.to_string())?;
+            let service = Arc::new(TaskService::new(store));
+            let web = crate::web::WebConsoleState::new(service.clone(), database_path);
+            let hostname = if cfg!(target_os = "windows") {
+                std::env::var("COMPUTERNAME").unwrap_or_else(|_| "device".into())
+            } else {
                 std::env::var("HOSTNAME").unwrap_or_else(|_| "device".into())
-            );
+            };
+            let device_id = format!("{}-{}", std::env::consts::OS, hostname);
+            #[cfg(target_os = "macos")]
+            let _ = app
+                .handle()
+                .set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            let toggle_item =
+                MenuItem::with_id(app, "toggle-window", "显示 / 隐藏窗口", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "退出 CardHannis", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&toggle_item, &quit_item])?;
+            let tray_icon = app
+                .handle()
+                .default_window_icon()
+                .expect("缺少应用图标")
+                .clone();
+            let tray = TrayIconBuilder::with_id("main")
+                .icon(tray_icon)
+                .icon_as_template(cfg!(target_os = "macos"))
+                .tooltip("CardHannis")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    if event.id() == "toggle-window" {
+                        toggle_main_window(app);
+                    } else if event.id() == "quit" {
+                        app.exit(0);
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        toggle_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+
             app.manage(AppState {
-                service: Mutex::new(TaskService::new(store)),
+                service,
                 device_id,
+                web,
+                tray,
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_tasks,
+            commands::open_web_console,
             commands::create_task,
             commands::complete_task,
             commands::delete_task,

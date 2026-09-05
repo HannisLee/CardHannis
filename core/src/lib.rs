@@ -25,6 +25,7 @@ mod tests {
                 title: "编写核心".into(),
                 notes: None,
                 estimated_active_minutes: Some(60),
+                due_date: None,
                 sort_order: 0,
                 created_device_id: "test-device".into(),
                 workspace_id: None,
@@ -48,7 +49,12 @@ mod tests {
             .unwrap();
         let first = service
             .store()
-            .end_block(&first.id, first.version, "2026-08-31T03:00:00.000Z")
+            .end_block(
+                &first.id,
+                first.version,
+                Some("接口已确认"),
+                "2026-08-31T03:00:00.000Z",
+            )
             .unwrap();
         let second = service
             .store()
@@ -154,6 +160,7 @@ mod tests {
                 title: "项目任务".into(),
                 notes: None,
                 estimated_active_minutes: None,
+                due_date: None,
                 sort_order: 0,
                 created_device_id: "test-device".into(),
                 workspace_id: Some(ws2.id.clone()),
@@ -208,6 +215,7 @@ mod tests {
                 title: "归档验证".into(),
                 notes: None,
                 estimated_active_minutes: None,
+                due_date: None,
                 sort_order: 0,
                 created_device_id: "test-device".into(),
                 workspace_id: Some(ws.id.clone()),
@@ -231,6 +239,76 @@ mod tests {
     }
 
     #[test]
+    fn create_task_persists_due_date() {
+        let service = service();
+        let task = service
+            .create(CreateTaskCommand {
+                title: "带截止日期".into(),
+                notes: None,
+                estimated_active_minutes: None,
+                due_date: Some("2026-09-05".into()),
+                sort_order: 0,
+                created_device_id: "test-device".into(),
+                workspace_id: None,
+                priority_id: None,
+            })
+            .unwrap();
+        assert_eq!(task.due_date.as_deref(), Some("2026-09-05"));
+        let updated = service
+            .update(
+                &task.id,
+                task.version,
+                UpdateTaskCommand {
+                    title: task.title.clone(),
+                    notes: task.notes.clone(),
+                    review_notes: task.review_notes.clone(),
+                    estimated_active_minutes: task.estimated_active_minutes,
+                    due_date: Some("2026-09-06".into()),
+                    sort_order: task.sort_order,
+                    workspace_id: task.workspace_id.clone(),
+                    priority_id: task.priority_id.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.due_date.as_deref(), Some("2026-09-06"));
+
+        let err = service
+            .create(CreateTaskCommand {
+                title: "非法日期".into(),
+                notes: None,
+                estimated_active_minutes: None,
+                due_date: Some("2026/09/05".into()),
+                sort_order: 0,
+                created_device_id: "test-device".into(),
+                workspace_id: None,
+                priority_id: None,
+            })
+            .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn leaving_in_progress_ends_active_work_session() {
+        let service = service();
+        let task = create(&service);
+        service.begin_work(&task.id, None).unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+        service.pause(&task.id, task.version).unwrap();
+
+        let sessions = service.sessions(&task.id).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].ended_at.is_some());
+
+        service.begin_work(&task.id, None).unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+        let done = service.complete(&task.id, task.version).unwrap();
+        let sessions = service.sessions(&task.id).unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions.iter().all(|session| session.ended_at.is_some()));
+        assert_eq!(done.status, TaskStatus::Completed);
+    }
+
+    #[test]
     fn unblock_returns_to_pending_and_reopen_works() {
         let service = service();
         let task = create(&service);
@@ -244,7 +322,10 @@ mod tests {
             )
             .unwrap();
         // 解除阻塞 → 待处理（等待中已并入）
-        service.unblock(&block.id, block.version).unwrap();
+        let unblocked = service
+            .unblock(&block.id, block.version, Some("依赖已就绪"))
+            .unwrap();
+        assert_eq!(unblocked.resolution_reason.as_deref(), Some("依赖已就绪"));
         let task = service.get(&task.id).unwrap().unwrap();
         assert_eq!(task.status, TaskStatus::Pending);
         assert!(!task.is_blocked);

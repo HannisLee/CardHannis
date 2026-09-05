@@ -1,13 +1,18 @@
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { PhysicalPosition } from '@tauri-apps/api/dpi';
+import { cursorPosition, getCurrentWindow } from '@tauri-apps/api/window';
+import { LogicalPosition } from '@tauri-apps/api/dpi';
 import './style.css';
 
 const app = document.querySelector('#app');
-const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, sessionMinutesByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null };
+const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, finishedSessionMinutesByTask: {}, sessionMinutesByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null, unblockingTaskId: null };
 const COLLAPSE_KEY = 'cardha…e.v2';
 const OPACITY_KEY = 'cardhannis.sticky.opacity.v1';
-const DOCK_KEY = 'cardhannis.sticky.dock.v1';
+let unfocusedOpacity = Number(localStorage.getItem(OPACITY_KEY) || 100);
+let mouseInside = false;
+function applySheetOpacity() {
+  const opacity = mouseInside ? 100 : unfocusedOpacity;
+  document.documentElement.style.setProperty('--sheet-opacity', (opacity / 100).toFixed(2));
+}
 let collapsed = {};
 try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch {}
 let pinned = true;
@@ -20,6 +25,8 @@ const ICONS = {
   add: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5.25v13.5M18.75 12H5.25"/></svg>',
   pin: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" transform="scale(0.6667)"><path d="M30 30H6V6h16V4H6a2 2 0 0 0-2 2v24a2 2 0 0 0 2 2h24a2 2 0 0 0 2-2V14h-2Z"/><path d="m33.57 9.33l-7-7a1 1 0 0 0-1.41 1.41l1.38 1.38l-4 4c-2-.87-4.35.14-5.92 1.68l-.72.71l3.54 3.54l-3.67 3.67l1.41 1.41l3.67-3.67L24.37 20l.71-.72c1.54-1.57 2.55-3.91 1.68-5.92l4-4l1.38 1.38a1 1 0 1 0 1.41-1.41Z"/></g></svg>',
   settings: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2"/><circle cx="12" cy="12" r="3"/></g></svg>',
+  calendar: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></g></svg>',
+  clock: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></g></svg>',
 };
 const PRIO_PALETTE = ['#5c7699', '#7a5ea6', '#3d735e', '#a0632f', '#8a5a7a', '#4e7d8a'];
 
@@ -45,10 +52,33 @@ function fmtDateTime(value) {
   return `${q(d.getMonth() + 1)}-${q(d.getDate())} ${q(d.getHours())}:${q(d.getMinutes())}`;
 }
 function fmtDuration(minutes) {
-  if (!minutes) return '—';
-  if (minutes < 60) return `${minutes}m`;
-  const h = minutes / 60;
-  return `${Number.isInteger(h) ? h : h.toFixed(1)}h`;
+  if (minutes === null || minutes === undefined || Number.isNaN(Number(minutes))) return '—';
+  const totalMinutes = Math.round(Number(minutes));
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const hours = totalMinutes / 60;
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)}h`;
+}
+function sessionDurationMs(session, fallbackEndMs = Date.now()) {
+  const startedAt = Date.parse(session.started_at);
+  if (!Number.isFinite(startedAt)) return 0;
+  const endedAt = session.ended_at
+    ? Date.parse(session.ended_at)
+    : fallbackEndMs;
+  if (!Number.isFinite(endedAt)) return 0;
+  return Math.max(0, endedAt - startedAt);
+}
+function activeMinutes(task, session) {
+  if (!session) return 0;
+  const fallback = task.status === 'completed' && task.completed_at
+    ? Date.parse(task.completed_at)
+    : Date.now();
+  return Math.floor(sessionDurationMs(session, fallback) / 60000);
+}
+function totalSessionMinutes(task, sessions) {
+  return Math.floor(sessions.reduce((acc, session) => acc + sessionDurationMs(
+    session,
+    task.status === 'completed' && task.completed_at ? Date.parse(task.completed_at) : Date.now(),
+  ), 0) / 60000);
 }
 function prioName(task) {
   return (state.prios.find((p) => p.id === task.priority_id) || {}).name || '—';
@@ -63,14 +93,14 @@ function row(task) {
   const done = task.status === 'completed';
   const block = state.blocksByTask[task.id];
   const pill = pillInfo(task);
-  const tip = escapeHtml([task.title, task.is_blocked && block && block.reason ? `阻塞：${block.reason}` : '', task.notes || '', task.estimated_active_minutes != null ? formatEstimatedHours(task.estimated_active_minutes) : ''].filter(Boolean).join(' ｜ '));
+  const tip = escapeHtml([task.title, task.is_blocked && block && block.reason ? `阻塞：${block.reason}` : '', task.due_date ? `预计完成：${task.due_date}` : '', task.notes || '', task.estimated_active_minutes != null ? formatEstimatedHours(task.estimated_active_minutes) : ''].filter(Boolean).join(' ｜ '));
   const d = `data-id="${task.id}"`;
   const v = `data-version="${task.version}"`;
   let actions = '';
   if (done) {
     actions = `<button class="nb" data-action="reopen" ${d} ${v} title="重新打开" type="button">↺</button>`;
   } else if (task.is_blocked) {
-    actions = `${block ? `<button class="nb" data-action="unblock" data-block-id="${block.id}" data-block-version="${block.version}" title="解除阻塞 → 等待中" type="button">⏏</button>` : ''}
+    actions = `${block ? `<button class="nb" data-action="unblock" data-task-id="${task.id}" data-block-id="${block.id}" data-block-version="${block.version}" title="解除阻塞 → 等待中" type="button">⏏</button>` : ''}
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">${ICONS.done}</button>`;
   } else if (task.status === 'in_progress') {
     actions = `<button class="nb" data-action="pause" ${d} ${v} title="暂停（回到待办）" type="button">${ICONS.pause}</button>
@@ -81,9 +111,13 @@ function row(task) {
       <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">${ICONS.block}</button>
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">${ICONS.done}</button>`;
   }
+  const dueChip = !done && task.due_date
+    ? `<span class="due-chip" title="预计完成日期">${ICONS.calendar}<span>${escapeHtml(formatDate(task.due_date))}</span></span>` : '';
+  const activeTimer = !done && task.status === 'in_progress' && !task.is_blocked
+    ? `<span class="active-timer" data-active-timer="${task.id}" title="累计活动时间（含历史会话）">${ICONS.clock}<span>${fmtDuration(state.sessionMinutesByTask[task.id] || 0)}</span></span>` : '';
   const statusSlot = done
     ? `<span class="done-meta" title="分级 · 完成时间 · 实际工作时间">${escapeHtml(prioName(task))} · ${fmtDateTime(task.completed_at)} · ${fmtDuration(state.sessionMinutesByTask[task.id])}</span>`
-    : `<span class="pill ${pill.cls}">${pill.label}</span>`;
+    : `<span class="meta-pills">${dueChip}${activeTimer}<span class="pill ${pill.cls}">${pill.label}</span></span>`;
   return `<div class="row ${done ? 'done' : ''}" data-id="${task.id}" data-version="${task.version}" title="${tip}">
     <span class="rt">${escapeHtml(task.title)}</span>
     ${statusSlot}
@@ -140,7 +174,10 @@ function render() {
     <form method="dialog" id="task-form" class="dlg-card">
       <h2>新任务</h2>
       <label>标题<input name="title" required maxlength="200" placeholder="要做点什么？" autofocus /></label>
-      <label>预计（小时，可选）<input name="estimated" type="number" min="0" step="0.5" placeholder="例如 2" /></label>
+      <div class="dlg-grid">
+        <label>预计小时<input name="estimated" type="number" min="0" step="0.5" placeholder="2" /></label>
+        <label>完成日期<input name="dueDate" type="date" /></label>
+      </div>
       <label>备注<textarea name="notes" rows="2" placeholder="可选"></textarea></label>
       <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" id="task-ok" type="button">贴上</button></div>
     </form>
@@ -149,9 +186,16 @@ function render() {
     <form method="dialog" id="block-form" class="dlg-card">
       <h2>标记阻塞</h2>
       <p class="block-hint" id="block-task-title"></p>
-      <label>原因<textarea name="reason" rows="2" required maxlength="300" placeholder="例如：等待接口文档"></textarea></label>
-      <label>补充备注<textarea name="note" rows="2" placeholder="可选"></textarea></label>
+      <label>原因<textarea name="reason" rows="3" required maxlength="300" placeholder="例如：等待接口文档"></textarea></label>
       <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" id="block-ok" type="button">确认阻塞</button></div>
+    </form>
+  </dialog>
+  <dialog id="unblock-dialog">
+    <form method="dialog" id="unblock-form" class="dlg-card">
+      <h2>解除阻塞</h2>
+      <p class="block-hint" id="unblock-task-title"></p>
+      <label>解除原因<textarea name="resolutionReason" rows="3" maxlength="300" placeholder="可选，例如：依赖已就绪"></textarea></label>
+      <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" id="unblock-ok" type="button">解除阻塞</button></div>
     </form>
   </dialog>
   <dialog id="prompt-dialog">
@@ -170,28 +214,38 @@ function render() {
   <dialog id="settings-dialog">
     <form method="dialog" class="dlg-card">
       <h2>设置</h2>
-      <label>窗口不透明度 <span id="opacity-val">${opacity}%</span>
-        <input type="range" id="opacity-range" min="40" max="100" step="5" value="${opacity}" />
+      <label>鼠标离开时不透明度 <span id="opacity-val">${opacity}%</span>
+        <input type="range" id="opacity-range" min="10" max="100" step="5" value="${opacity}" />
       </label>
-      <label class="set-check"><input type="checkbox" id="dock-check" ${docked ? 'checked' : ''} /> 贴边自动收起（标题栏 🧲 同开关）</label>
+      <div class="set-web">
+        <span>Web 设置</span>
+        <button id="btn-web" type="button">前往</button>
+      </div>
       <div class="dlg-actions"><button class="ghost" type="button" data-close>关闭</button></div>
     </form>
   </dialog>
   <div id="toast" class="toast" role="status"></div>`;
 
-  document.querySelector('.win-sheet').style.opacity = (opacity / 100).toFixed(2);
+  unfocusedOpacity = opacity;
+  applySheetOpacity();
   document.querySelector('#btn-new')?.addEventListener('click', () => openTaskDialog(null));
   document.querySelector('#btn-settings')?.addEventListener('click', () => document.querySelector('#settings-dialog').showModal());
   document.querySelector('#opacity-range')?.addEventListener('input', (e) => {
     const v = Number(e.target.value);
     localStorage.setItem(OPACITY_KEY, String(v));
     document.querySelector('#opacity-val').textContent = `${v}%`;
-    document.querySelector('.win-sheet').style.opacity = (v / 100).toFixed(2);
+    unfocusedOpacity = v;
+    applySheetOpacity();
   });
-  document.querySelector('#dock-check')?.addEventListener('change', (e) => { setDock(e.target.checked); });
+  document.querySelector('#btn-web')?.addEventListener('click', async () => {
+    try {
+      await call('open_web_console');
+      notify('已打开 Web 设置');
+    } catch (error) { notify(error.message || '无法打开 Web 设置'); }
+  });
   document.querySelector('#btn-pin')?.addEventListener('click', togglePin);
-  document.querySelector('#btn-min')?.addEventListener('click', () => theWindow()?.minimize());
-  document.querySelector('#btn-close')?.addEventListener('click', () => theWindow()?.close());
+  document.querySelector('#btn-min')?.addEventListener('click', () => theWindow()?.hide());
+  document.querySelector('#btn-close')?.addEventListener('click', () => theWindow()?.hide());
   document.querySelector('#ws-add')?.addEventListener('click', addWorkspace);
   document.querySelectorAll('.ws-tab').forEach((tab) => tab.addEventListener('click', () => {
     state.activeWs = tab.dataset.ws;
@@ -213,8 +267,15 @@ async function addWorkspace() {
   try {
     const created = await call('create_workspace', { name: trimmed });
     await loadMeta();
+    if (!state.workspaces.some((workspace) => workspace.id === created.id)) {
+      throw new Error('工作区已创建，但刷新列表失败');
+    }
     state.activeWs = created.id;
+    await loadTasks();
     render();
+    requestAnimationFrame(() => {
+      document.querySelector(`.ws-tab[data-ws="${CSS.escape(created.id)}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
     notify(`已创建工作区「${trimmed}」`);
   } catch (error) { notify(error.message || '创建失败'); }
 }
@@ -278,6 +339,7 @@ async function submitTask() {
         title,
         notes: form.querySelector('[name="notes"]').value.trim() || null,
         estimatedActiveMinutes: parseEstimatedMinutes(form.querySelector('[name="estimated"]').value),
+        dueDate: form.querySelector('[name="dueDate"]').value || null,
         workspaceId: target.ws,
         priorityId: target.prio,
       },
@@ -305,17 +367,23 @@ async function handleAction(button) {
   const id = button.dataset.id;
   const version = Number(button.dataset.version);
   try {
-    if (action === 'complete') { await call('complete_task', { id, expectedVersion: version }); notify('任务完成 ✦'); }
+    if (action === 'complete') {
+      const task = state.tasks.find((item) => item.id === id);
+      if (task?.is_blocked) {
+        notify('请先解除阻塞，再完成任务');
+        return;
+      }
+      await call('complete_task', { id, expectedVersion: version });
+      notify('任务完成 ✦');
+    }
     if (action === 'reopen') { await call('reopen_task', { id, expectedVersion: version }); notify('任务已重新打开'); }
     if (action === 'work') { await call('start_work', { taskId: id }); notify('开始计时 ▶'); }
     if (action === 'pause') {
-      const session = state.sessionsByTask[id];
-      if (session) { try { await call('finish_work', { sessionId: session.id }); } catch {} }
       await call('pause_task', { id, expectedVersion: version });
       notify('已暂停，回到待办');
     }
     if (action === 'block') { openBlockDialog(id); return; }
-    if (action === 'unblock') { await call('unblock_task', { blockId: button.dataset.blockId, expectedVersion: Number(button.dataset.blockVersion) }); notify('已解除阻塞，进入等待中'); }
+    if (action === 'unblock') { openUnblockDialog(button.dataset.taskId || id); return; }
     await loadTasks();
   } catch (error) { notify(error.message || '操作失败'); }
 }
@@ -325,7 +393,6 @@ function openBlockDialog(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
   const form = document.querySelector('#block-form');
   form.querySelector('[name="reason"]').value = '';
-  form.querySelector('[name="note"]').value = '';
   document.querySelector('#block-task-title').textContent = task ? task.title : '';
   document.querySelector('#block-dialog').showModal();
 }
@@ -336,12 +403,42 @@ async function submitBlock() {
   if (!reason) { notify('阻塞原因不能为空'); return; }
   if (!state.blockingTaskId) return;
   try {
-    await call('block_task', { taskId: state.blockingTaskId, reason, note: form.querySelector('[name="note"]').value.trim() || null });
+    await call('block_task', { taskId: state.blockingTaskId, reason, note: null });
     document.querySelector('#block-dialog').close();
     state.blockingTaskId = null;
     await loadTasks();
     notify('已标记阻塞');
   } catch (error) { notify(error.message || '标记阻塞失败'); }
+}
+
+function openUnblockDialog(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  const block = state.blocksByTask[taskId];
+  if (!task || !block) { notify('未找到活动阻塞记录'); return; }
+  state.unblockingTaskId = taskId;
+  const form = document.querySelector('#unblock-form');
+  form.querySelector('[name="resolutionReason"]').value = '';
+  document.querySelector('#unblock-task-title').textContent = task.title;
+  document.querySelector('#unblock-dialog').showModal();
+}
+
+async function submitUnblock() {
+  const taskId = state.unblockingTaskId;
+  const block = state.blocksByTask[taskId];
+  if (!taskId || !block) return;
+  const form = document.querySelector('#unblock-form');
+  const reason = form.querySelector('[name="resolutionReason"]').value.trim() || null;
+  try {
+    await call('unblock_task', {
+      blockId: block.id,
+      expectedVersion: block.version,
+      resolutionReason: reason,
+    });
+    document.querySelector('#unblock-dialog').close();
+    state.unblockingTaskId = null;
+    await loadTasks();
+    notify('已解除阻塞，回到待办');
+  } catch (error) { notify(error.message || '解除阻塞失败'); }
 }
 
 async function call(command, args = {}) { return isTauri() ? invoke(command, args) : previewCommand(command, args); }
@@ -364,19 +461,20 @@ async function previewCommand(command, args) {
     state.prios = state.prios.filter((p) => p.id !== args.id);
   }
   if (command === 'create_task') {
-    const task = { id: crypto.randomUUID(), title: args.input.title, notes: args.input.notes, estimated_active_minutes: args.input.estimatedActiveMinutes, status: 'pending', sort_order: 0, updated_at: new Date().toISOString(), version: 1, is_blocked: false, workspace_id: args.input.workspaceId, priority_id: args.input.priorityId, home_workspace_id: args.input.workspaceId };
+    const task = { id: crypto.randomUUID(), title: args.input.title, notes: args.input.notes, estimated_active_minutes: args.input.estimatedActiveMinutes, due_date: args.input.dueDate || null, status: 'pending', sessions: [], sort_order: 0, updated_at: new Date().toISOString(), version: 1, is_blocked: false, workspace_id: args.input.workspaceId, priority_id: args.input.priorityId, home_workspace_id: args.input.workspaceId };
     state.tasks.unshift(task);
     return task;
   }
-  if (command === 'complete_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { task.status = 'completed'; task.completed_at = new Date().toISOString(); task.version += 1; task.updated_at = task.completed_at; task.workspace_id = 'done'; } }
+  if (command === 'complete_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { if (task.activeSession) task.activeSession.ended_at = new Date().toISOString(); task.status = 'completed'; task.completed_at = new Date().toISOString(); task.version += 1; task.updated_at = task.completed_at; task.workspace_id = 'done'; delete task.activeSession; } }
   if (command === 'reopen_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { task.status = 'pending'; task.completed_at = null; task.version += 1; task.workspace_id = task.home_workspace_id || 'daily'; } }
-  if (command === 'pause_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { task.status = 'pending'; task.version += 1; task.updated_at = new Date().toISOString(); } }
-  if (command === 'finish_work') { for (const task of state.tasks) { if (task.activeSession?.id === args.sessionId) delete task.activeSession; } }
-  if (command === 'list_sessions') { const task = state.tasks.find((item) => item.id === args.taskId); return task?.activeSession ? [task.activeSession] : []; }
+  if (command === 'pause_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { if (task.activeSession) task.activeSession.ended_at = new Date().toISOString(); task.status = 'pending'; task.version += 1; task.updated_at = new Date().toISOString(); delete task.activeSession; } }
+  if (command === 'finish_work') { for (const task of state.tasks) { const session = (task.sessions || []).find((item) => item.id === args.sessionId); if (session) session.ended_at = new Date().toISOString(); if (task.activeSession?.id === args.sessionId) delete task.activeSession; } }
+  if (command === 'list_sessions') { const task = state.tasks.find((item) => item.id === args.taskId); return task ? [...(task.sessions || [])] : []; }
   if (command === 'delete_task') state.tasks = state.tasks.filter((item) => item.id !== args.id);
-  if (command === 'start_work') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.status = 'in_progress'; task.version += 1; task.activeSession = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null }; } }
+  if (command === 'start_work') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.status = 'in_progress'; task.version += 1; task.sessions = task.sessions || []; task.activeSession = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null }; task.sessions.push(task.activeSession); } }
+  if (command === 'open_web_console') throw new Error('Web 设置仅桌面端可用');
   if (command === 'list_blocks') { const task = state.tasks.find((item) => item.id === args.taskId); return task?.activeBlock ? [task.activeBlock] : []; }
-  if (command === 'block_task') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.is_blocked = true; task.activeBlock = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null, reason: args.reason, note: args.note ?? null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, deleted_at: null }; } }
+  if (command === 'block_task') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { if (task.activeSession) task.activeSession.ended_at = new Date().toISOString(); task.is_blocked = true; task.activeBlock = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null, reason: args.reason, note: args.note ?? null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, deleted_at: null }; } }
   if (command === 'unblock_task') { for (const task of state.tasks) { if (task.activeBlock?.id === args.blockId) { task.is_blocked = false; delete task.activeBlock; task.status = 'pending'; task.version += 1; } } }
 }
 function seedPreviewMeta() {
@@ -406,6 +504,7 @@ async function loadTasks() {
   state.tasks = await call('list_tasks');
   state.blocksByTask = {};
   state.sessionsByTask = {};
+  state.finishedSessionMinutesByTask = {};
   state.sessionMinutesByTask = {};
   await Promise.all(state.tasks.filter((task) => task.is_blocked).map(async (task) => {
     const blocks = await call('list_blocks', { taskId: task.id });
@@ -416,15 +515,30 @@ async function loadTasks() {
     const sessions = await call('list_sessions', { taskId: task.id });
     const active = sessions.find((session) => !session.ended_at);
     if (active) state.sessionsByTask[task.id] = active;
+    const finishedMinutes = Math.floor(sessions
+      .filter((session) => session.ended_at)
+      .reduce((acc, session) => acc + sessionDurationMs(session), 0) / 60000);
+    state.finishedSessionMinutesByTask[task.id] = finishedMinutes;
+    state.sessionMinutesByTask[task.id] = finishedMinutes + activeMinutes(task, active);
   }));
   await Promise.all(state.tasks.filter((task) => task.status === 'completed').map(async (task) => {
     const sessions = await call('list_sessions', { taskId: task.id });
-    const minutes = sessions.filter((x) => x.ended_at).reduce((acc, x) => acc + Math.max(0, Math.round((Date.parse(x.ended_at) - Date.parse(x.started_at)) / 60000)), 0);
-    state.sessionMinutesByTask[task.id] = minutes;
+    state.sessionMinutesByTask[task.id] = totalSessionMinutes(task, sessions);
   }));
   render();
 }
 
+
+// 每分钟只刷新计时文本，不整页重绘，避免影响打开中的弹窗。
+setInterval(() => {
+  document.querySelectorAll('[data-active-timer]').forEach((element) => {
+    const task = state.tasks.find((item) => item.id === element.dataset.activeTimer);
+    if (!task) return;
+    const finished = state.finishedSessionMinutesByTask[task.id] || 0;
+    const current = activeMinutes(task, state.sessionsByTask[task.id]);
+    element.querySelector('span').textContent = fmtDuration(finished + current);
+  });
+}, 60000);
 
 // ===== 应用内 prompt / confirm（webview 无原生对话框） =====
 let promptResolve = null;
@@ -469,6 +583,7 @@ document.addEventListener('click', (e) => {
   }
   if (e.target.closest('#task-ok')) { submitTask(); return; }
   if (e.target.closest('#block-ok')) { submitBlock(); return; }
+  if (e.target.closest('#unblock-ok')) { submitUnblock(); return; }
 });
 document.querySelector('#prompt-dialog')?.addEventListener('close', () => { if (promptResolve) { promptResolve(null); promptResolve = null; } });
 document.querySelector('#confirm-dialog')?.addEventListener('close', () => { if (confirmResolve) { confirmResolve(false); confirmResolve = null; } });
@@ -612,75 +727,31 @@ document.addEventListener('click', (e) => {
   if (closer) closer.closest('dialog')?.close();
 });
 
-// ===== 贴边自动收起 =====
-let docked = localStorage.getItem(DOCK_KEY) !== '0';
-let dockEdge = null;
-let savedPos = null;
-
-async function setDock(on) {
-  localStorage.setItem(DOCK_KEY, on ? '1' : '0');
+// ===== 全局鼠标位置驱动的便签透明度 =====
+async function updateMouseInside() {
   const w = theWindow();
-  if (!w) { docked = on; render(); return; }
-  docked = on;
-  if (on) {
-    await computeEdge(w);
-    notify('已开启贴边收起：鼠标移开窗口会收进屏幕边');
-  } else {
-    if (savedPos) { try { await w.setPosition(savedPos); } catch {} }
-    savedPos = null;
-    notify('已关闭贴边收起');
-  }
-  render();
-}
-function toggleDock() { setDock(!docked); }
-
-async function computeEdge(w) {
+  if (!w) return;
   try {
-    const mon = await w.currentMonitor();
-    const pos = await w.outerPosition();
-    const size = await w.outerSize();
-    if (!mon) return;
-    const mx = mon.position.x, my = mon.position.y, mw = mon.size.width, mh = mon.size.height;
-    const dLeft = pos.x - mx;
-    const dRight = (mx + mw) - (pos.x + size.width);
-    const dTop = pos.y - my;
-    const dBottom = (my + mh) - (pos.y + size.height);
-    const min = Math.min(dLeft, dRight, dTop, dBottom);
-    dockEdge = min === dLeft ? 'left' : min === dRight ? 'right' : min === dTop ? 'top' : 'bottom';
-    savedPos = pos;
+    const [cursor, position, size] = await Promise.all([
+      cursorPosition(),
+      w.outerPosition(),
+      w.outerSize(),
+    ]);
+    const inside = cursor.x >= position.x
+      && cursor.x < position.x + size.width
+      && cursor.y >= position.y
+      && cursor.y < position.y + size.height;
+    if (inside !== mouseInside) {
+      mouseInside = inside;
+      applySheetOpacity();
+    }
   } catch {}
 }
 
-async function tuckWindow() {
-  const w = theWindow();
-  if (!w || !docked || savedPos === null) return;
-  if (dragState || document.querySelector('dialog[open]')) return;
-  try {
-    const mon = await w.currentMonitor();
-    const size = await w.outerSize();
-    if (!mon) return;
-    const scale = mon.scaleFactor || 1;
-    const sliver = Math.round(12 * scale);
-    let { x, y } = savedPos;
-    if (dockEdge === 'left') x = mon.position.x - size.width + sliver;
-    if (dockEdge === 'right') x = mon.position.x + mon.size.width - sliver;
-    if (dockEdge === 'top') y = mon.position.y - size.height + sliver;
-    if (dockEdge === 'bottom') y = mon.position.y + mon.size.height - sliver;
-    await w.setPosition(new PhysicalPosition(x, y));
-  } catch {}
-}
+setInterval(updateMouseInside, 100);
+updateMouseInside();
 
-async function restoreWindow() {
-  const w = theWindow();
-  if (!w || !docked || savedPos === null) return;
-  try { await w.setPosition(savedPos); } catch {}
-}
-
-document.addEventListener('mouseleave', () => { if (docked) tuckWindow(); });
-document.addEventListener('mouseenter', () => { if (docked) restoreWindow(); });
-
-
-// ===== 自绘拖拽（避免 macOS 边缘半屏吸附） =====
+// ===== 自绘拖拽（跨平台，避免 macOS 边缘半屏吸附） =====
 let dragState = null;
 document.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
@@ -689,24 +760,23 @@ document.addEventListener('mousedown', (e) => {
   const w = theWindow();
   if (!w) return;
   e.preventDefault();
-  w.outerPosition().then((pos) => {
-    dragState = { sx: e.screenX, sy: e.screenY, px: pos.x, py: pos.y };
+  Promise.all([w.outerPosition(), w.scaleFactor()]).then(([pos, scale]) => {
+    const logical = pos.toLogical(scale);
+    dragState = { sx: e.screenX, sy: e.screenY, px: logical.x, py: logical.y };
   }).catch(() => {});
 });
 document.addEventListener('mousemove', (e) => {
   if (!dragState) return;
   const w = theWindow();
   if (!w) return;
-  const scale = window.devicePixelRatio || 1;
-  w.setPosition(new PhysicalPosition(
-    Math.round(dragState.px + (e.screenX - dragState.sx) * scale),
-    Math.round(dragState.py + (e.screenY - dragState.sy) * scale),
+  w.setPosition(new LogicalPosition(
+    dragState.px + (e.screenX - dragState.sx),
+    dragState.py + (e.screenY - dragState.sy),
   )).catch(() => {});
 });
 document.addEventListener('mouseup', () => {
   if (!dragState) return;
   dragState = null;
-  if (docked) { const w = theWindow(); if (w) computeEdge(w); }
 });
 
 function notify(message) {
@@ -721,7 +791,9 @@ function notify(message) {
 render();
 (async () => {
   const w = theWindow();
-  if (w) { try { pinned = await w.isAlwaysOnTop(); } catch {} }
+  if (w) {
+    try { pinned = await w.isAlwaysOnTop(); } catch {}
+  }
   await loadMeta();
   await loadTasks();
 })();

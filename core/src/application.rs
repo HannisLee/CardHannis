@@ -20,6 +20,7 @@ impl TaskService {
             title: command.title,
             notes: command.notes,
             estimated_active_minutes: command.estimated_active_minutes,
+            due_date: command.due_date,
             sort_order: command.sort_order,
             created_device_id: command.created_device_id,
             workspace_id: command.workspace_id,
@@ -40,6 +41,7 @@ impl TaskService {
             command.notes.as_deref(),
             command.review_notes.as_deref(),
             command.estimated_active_minutes,
+            command.due_date.as_deref(),
             command.sort_order,
             command.workspace_id.as_deref(),
             command.priority_id.as_deref(),
@@ -84,8 +86,17 @@ impl TaskService {
             .start_block(task_id, &command.reason, command.note.as_deref(), now())
     }
 
-    pub fn unblock(&self, block_id: &str, expected_version: i64) -> Result<TaskBlock> {
-        self.store.end_block(block_id, expected_version, now())
+    pub fn unblock(
+        &self,
+        block_id: &str,
+        expected_version: i64,
+        resolution_reason: Option<&str>,
+    ) -> Result<TaskBlock> {
+        let resolution_reason = resolution_reason
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        self.store
+            .end_block(block_id, expected_version, resolution_reason, now())
     }
 
     pub fn get(&self, id: &str) -> Result<Option<Task>> {
@@ -156,6 +167,8 @@ pub struct CreateTaskCommand {
     pub notes: Option<String>,
     pub estimated_active_minutes: Option<i64>,
     #[serde(default)]
+    pub due_date: Option<String>,
+    #[serde(default)]
     pub sort_order: i64,
     pub created_device_id: String,
     #[serde(default)]
@@ -170,6 +183,8 @@ pub struct UpdateTaskCommand {
     pub notes: Option<String>,
     pub review_notes: Option<String>,
     pub estimated_active_minutes: Option<i64>,
+    #[serde(default)]
+    pub due_date: Option<String>,
     #[serde(default)]
     pub sort_order: i64,
     #[serde(default)]

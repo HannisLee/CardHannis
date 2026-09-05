@@ -27,7 +27,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 ├── package.json            # 根级 npm 脚本和 Tauri CLI
 ├── README.md               # Rust 核心库说明与验证命令
 ├── core/
-│   ├── migrations/         # SQLite 迁移；当前为 0001_initial.sql
+│   ├── migrations/         # SQLite 迁移；当前为 0006_due_date_and_unblock_reason.sql
 │   └── src/
 │       ├── application.rs  # TaskService、命令 DTO
 │       ├── domain.rs       # Task、TaskBlock、WorkSession 等类型
@@ -53,7 +53,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 新的业务规则优先放在 `TaskService` / `TaskStore`，不要在 Tauri command 或前端复制业务逻辑。
 - `TaskService` 是推荐的稳定业务门面；适配层只负责请求参数转换、调用服务和错误映射。
 - `TaskStore` 内部使用 `Mutex<rusqlite::Connection>`，初始化时开启外键并执行 `core/migrations/0001_initial.sql`。
-- 领域结构体实现 `Serialize` / `Deserialize`，对外 JSON 字段使用 Rust 当前命名（如 `estimated_active_minutes`）。
+- 领域结构体实现 `Serialize` / `Deserialize`，对外 JSON 字段使用 Rust 当前命名（如 `estimated_active_minutes`、`due_date`、`resolution_reason`）。
 - 时间统一使用 UTC RFC3339 毫秒字符串，常规生成方式是 `Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)`。
 - ID 使用 UUID v4 字符串。
 
@@ -71,7 +71,10 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - Python 原型（`web/`）及其 Supabase 同步已于 2026-09-04 删除；桌面端为唯一运行形态。
 - `supabase-schema.sql` 保留为远端 schema 预留件，将来若在 Rust 侧重实现同步时启用；届时必须接入 Supabase Auth 与按用户 RLS，不能沿用旧的公开读写策略。
 
-- 桌面端（`ui/src`）当前为 350×400 置顶便签小窗：横向工作区标签 + 纵向可收起分级 + 单行条目（标题+状态/元信息+行内按钮）；已完成任务归档到内置「已完成」工作区；贴边收起、透明度设置、自绘拖拽；应用内弹窗（webview 无原生 prompt/confirm）。
+- 桌面端内置 Web 设置控制台：默认关闭，仅监听 `127.0.0.1:1421`，设置页点击「前往」后启动并打开浏览器，5 分钟无 HTTP 操作自动关闭；Web 端不提供任务基础操作。
+- 桌面端以 macOS 菜单栏常驻图标运行，不再显示 Dock 图标；左键菜单栏图标可显示/隐藏主窗口，右键菜单可退出。
+- Windows 端使用系统托盘常驻图标；关闭按钮隐藏主窗口，应用仍保留在托盘。
+- 桌面端（`ui/src`）当前为 350×400 置顶便签小窗：横向工作区标签 + 纵向可收起分级 + 单行条目（标题+状态/元信息+行内按钮）；已完成任务归档到内置「已完成」工作区；失焦透明度设置（鼠标移入便签恢复 100%，移出按设置值变透明）、自绘拖拽；应用内弹窗（webview 无原生 prompt/confirm）。
 
 ## 领域不变量
 
@@ -79,13 +82,15 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 
 - 任务标题、阻塞原因和设备 ID 不能是空白字符串。
 - `estimated_active_minutes` 只能为 `NULL` 或非负整数。
+- `due_date` 只能为 `NULL` 或 `YYYY-MM-DD` 格式日期。
 - 完成任务必须有 `completed_at`；未完成任务不能有 `completed_at`。
 - `completed_at` 不能早于 `started_at`。
 - 已删除任务不能继续正常更新、开始工作或创建阻塞。
 - 已完成任务不能开始工作或创建阻塞。
 - 任务被阻塞时不能开始新的工作；开始阻塞会结束该任务当前未结束的工作会话。
+- 任务从进行中转为待处理或完成时，核心层会结束当前活动工作会话，保证累计活动时间落库。
 - 同一任务最多一个活动阻塞（由 SQLite 部分唯一索引 `ux_task_blocks_one_active` 保证）。
-- 同一任务最多一个活动工作会话（由 `ux_work_sessions_one_active` 保证）。
+- 同一任务最多一个活动工作会话（由 `ux_work_sessions_one_active` 保证）；`task_blocks.resolution_reason` 保存可选解除阻塞原因。
 - 更新任务、删除任务、完成任务、结束阻塞等并发敏感操作必须校验 `expected_version`；冲突返回 `VersionConflict`。
 - 迁移 SQL 是跨实现共享契约。新增迁移时要考虑已有数据库升级路径，不要只修改当前建表 SQL 而破坏现有数据库。
 - 迁移通过 `schema_migrations` 表记录执行进度，Rust 与 Python 两端都按文件名顺序执行 `core/migrations/*.sql`；新增迁移直接加文件，不要改历史文件。

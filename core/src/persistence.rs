@@ -1,5 +1,5 @@
 use crate::{domain::*, error::*};
-use chrono::{SecondsFormat, Utc};
+use chrono::{NaiveDate, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{path::Path, sync::Mutex};
 use uuid::Uuid;
@@ -24,6 +24,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0005_merge_waiting.sql",
         include_str!("../migrations/0005_merge_waiting.sql"),
+    ),
+    (
+        "0006_due_date_and_unblock_reason.sql",
+        include_str!("../migrations/0006_due_date_and_unblock_reason.sql"),
     ),
 ];
 
@@ -88,8 +92,8 @@ impl TaskStore {
         let id = Uuid::new_v4().to_string();
         let connection = self.connection.lock().expect("database mutex poisoned");
         connection.execute(
-            "INSERT INTO tasks (id, title, notes, estimated_active_minutes, created_at, sort_order, created_device_id, updated_at, workspace_id, priority_id, home_workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?5, ?8, ?9, ?8)",
-            params![id, input.title.trim(), input.notes, input.estimated_active_minutes, created_at, input.sort_order, input.created_device_id.trim(), input.workspace_id, input.priority_id],
+            "INSERT INTO tasks (id, title, notes, estimated_active_minutes, due_date, created_at, sort_order, created_device_id, updated_at, workspace_id, priority_id, home_workspace_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?6, ?9, ?10, ?9)",
+            params![id, input.title.trim(), input.notes, input.estimated_active_minutes, input.due_date, created_at, input.sort_order, input.created_device_id.trim(), input.workspace_id, input.priority_id],
         )?;
         drop(connection);
         self.get_task(&id)?.ok_or(CoreError::TaskNotFound(id))
@@ -105,7 +109,7 @@ impl TaskStore {
         let sql = if include_deleted {
             TASK_SELECT_SQL
         } else {
-            "SELECT t.id, t.title, t.notes, t.review_notes, t.estimated_active_minutes, t.created_at, t.started_at, t.completed_at, t.status, t.sort_order, t.created_device_id, t.updated_at, t.deleted_at, t.version, EXISTS (SELECT 1 FROM task_blocks b WHERE b.task_id = t.id AND b.ended_at IS NULL AND b.deleted_at IS NULL), t.workspace_id, t.priority_id, t.home_workspace_id FROM tasks t WHERE t.deleted_at IS NULL ORDER BY t.sort_order, t.created_at"
+            "SELECT t.id, t.title, t.notes, t.review_notes, t.estimated_active_minutes, t.due_date, t.created_at, t.started_at, t.completed_at, t.status, t.sort_order, t.created_device_id, t.updated_at, t.deleted_at, t.version, EXISTS (SELECT 1 FROM task_blocks b WHERE b.task_id = t.id AND b.ended_at IS NULL AND b.deleted_at IS NULL), t.workspace_id, t.priority_id, t.home_workspace_id FROM tasks t WHERE t.deleted_at IS NULL ORDER BY t.sort_order, t.created_at"
         };
         let mut statement = connection.prepare(sql)?;
         let rows = statement.query_map([], map_task)?;
@@ -121,16 +125,30 @@ impl TaskStore {
         notes: Option<&str>,
         review_notes: Option<&str>,
         estimated_active_minutes: Option<i64>,
+        due_date: Option<&str>,
         sort_order: i64,
         workspace_id: Option<&str>,
         priority_id: Option<&str>,
         updated_at: impl Into<String>,
     ) -> Result<Task> {
         validate_task_fields(title, estimated_active_minutes)?;
+        validate_due_date(due_date)?;
         let connection = self.connection.lock().expect("database mutex poisoned");
         let changed = connection.execute(
-            "UPDATE tasks SET title = ?1, notes = ?2, review_notes = ?3, estimated_active_minutes = ?4, sort_order = ?5, workspace_id = ?9, priority_id = ?10, home_workspace_id = COALESCE(?9, home_workspace_id), updated_at = ?6, version = version + 1 WHERE id = ?7 AND version = ?8 AND deleted_at IS NULL",
-            params![title.trim(), notes, review_notes, estimated_active_minutes, sort_order, updated_at.into(), id, expected_version, workspace_id, priority_id],
+            "UPDATE tasks SET title = ?1, notes = ?2, review_notes = ?3, estimated_active_minutes = ?4, due_date = ?11, sort_order = ?5, workspace_id = ?9, priority_id = ?10, home_workspace_id = COALESCE(?9, home_workspace_id), updated_at = ?6, version = version + 1 WHERE id = ?7 AND version = ?8 AND deleted_at IS NULL",
+            params![
+                title.trim(),
+                notes,
+                review_notes,
+                estimated_active_minutes,
+                sort_order,
+                updated_at.into(),
+                id,
+                expected_version,
+                workspace_id,
+                priority_id,
+                due_date,
+            ],
         )?;
         if changed == 0 {
             return Err(resolve_task_update_error(&connection, id));
@@ -157,6 +175,13 @@ impl TaskStore {
         }
         if task.version != expected_version {
             return Err(CoreError::VersionConflict);
+        }
+        // 离开进行中状态时结束活动会话，保证累计活动时间在完成/暂停后立即落库。
+        if task.status == TaskStatus::InProgress && status != TaskStatus::InProgress {
+            connection.execute(
+                "UPDATE work_sessions SET ended_at = ?1 WHERE task_id = ?2 AND ended_at IS NULL",
+                params![updated_at, id],
+            )?;
         }
         let completed_at = (status == TaskStatus::Completed).then(|| updated_at.clone());
         let started_at = match status {
@@ -261,7 +286,7 @@ impl TaskStore {
         )?;
         let id = Uuid::new_v4().to_string();
         tx.execute(
-            "INSERT INTO task_blocks (id, task_id, started_at, reason, note, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?3, ?3)",
+            "INSERT INTO task_blocks (id, task_id, started_at, reason, note, resolution_reason, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?3, ?3)",
             params![id, task_id, started_at, reason.trim(), note],
         ).map_err(map_constraint_error)?;
         tx.commit()?;
@@ -273,12 +298,13 @@ impl TaskStore {
         &self,
         block_id: &str,
         expected_version: i64,
+        resolution_reason: Option<&str>,
         ended_at: impl Into<String>,
     ) -> Result<TaskBlock> {
         let ended_at = ended_at.into();
         let connection = self.connection.lock().expect("database mutex poisoned");
         let tx = connection.unchecked_transaction()?;
-        let changed = tx.execute("UPDATE task_blocks SET ended_at = ?1, updated_at = ?1, version = version + 1 WHERE id = ?2 AND version = ?3 AND ended_at IS NULL AND deleted_at IS NULL", params![ended_at, block_id, expected_version])?;
+        let changed = tx.execute("UPDATE task_blocks SET ended_at = ?1, resolution_reason = ?2, updated_at = ?1, version = version + 1 WHERE id = ?3 AND version = ?4 AND ended_at IS NULL AND deleted_at IS NULL", params![ended_at, resolution_reason, block_id, expected_version])?;
         if changed == 0 {
             let error = resolve_block_update_error(&tx, block_id, expected_version);
             return Err(error);
@@ -326,9 +352,9 @@ impl TaskStore {
     pub fn list_blocks(&self, task_id: &str, include_deleted: bool) -> Result<Vec<TaskBlock>> {
         let connection = self.connection.lock().expect("database mutex poisoned");
         let sql = if include_deleted {
-            "SELECT id, task_id, started_at, ended_at, reason, note, created_at, updated_at, version, deleted_at FROM task_blocks WHERE task_id = ?1 ORDER BY started_at"
+            "SELECT id, task_id, started_at, ended_at, reason, note, resolution_reason, created_at, updated_at, version, deleted_at FROM task_blocks WHERE task_id = ?1 ORDER BY started_at"
         } else {
-            "SELECT id, task_id, started_at, ended_at, reason, note, created_at, updated_at, version, deleted_at FROM task_blocks WHERE task_id = ?1 AND deleted_at IS NULL ORDER BY started_at"
+            "SELECT id, task_id, started_at, ended_at, reason, note, resolution_reason, created_at, updated_at, version, deleted_at FROM task_blocks WHERE task_id = ?1 AND deleted_at IS NULL ORDER BY started_at"
         };
         let mut statement = connection.prepare(sql)?;
         let rows = statement.query_map(params![task_id], map_block)?;
@@ -601,9 +627,9 @@ impl TaskStore {
     }
 }
 
-const TASK_BY_ID_SQL: &str = "SELECT t.id, t.title, t.notes, t.review_notes, t.estimated_active_minutes, t.created_at, t.started_at, t.completed_at, t.status, t.sort_order, t.created_device_id, t.updated_at, t.deleted_at, t.version, EXISTS (SELECT 1 FROM task_blocks b WHERE b.task_id = t.id AND b.ended_at IS NULL AND b.deleted_at IS NULL), t.workspace_id, t.priority_id, t.home_workspace_id FROM tasks t WHERE t.id = ?1";
-const TASK_SELECT_SQL: &str = "SELECT t.id, t.title, t.notes, t.review_notes, t.estimated_active_minutes, t.created_at, t.started_at, t.completed_at, t.status, t.sort_order, t.created_device_id, t.updated_at, t.deleted_at, t.version, EXISTS (SELECT 1 FROM task_blocks b WHERE b.task_id = t.id AND b.ended_at IS NULL AND b.deleted_at IS NULL), t.workspace_id, t.priority_id, t.home_workspace_id FROM tasks t ORDER BY t.sort_order, t.created_at";
-const BLOCK_SELECT_SQL: &str = "SELECT id, task_id, started_at, ended_at, reason, note, created_at, updated_at, version, deleted_at FROM task_blocks WHERE id = ?1";
+const TASK_BY_ID_SQL: &str = "SELECT t.id, t.title, t.notes, t.review_notes, t.estimated_active_minutes, t.due_date, t.created_at, t.started_at, t.completed_at, t.status, t.sort_order, t.created_device_id, t.updated_at, t.deleted_at, t.version, EXISTS (SELECT 1 FROM task_blocks b WHERE b.task_id = t.id AND b.ended_at IS NULL AND b.deleted_at IS NULL), t.workspace_id, t.priority_id, t.home_workspace_id FROM tasks t WHERE t.id = ?1";
+const TASK_SELECT_SQL: &str = "SELECT t.id, t.title, t.notes, t.review_notes, t.estimated_active_minutes, t.due_date, t.created_at, t.started_at, t.completed_at, t.status, t.sort_order, t.created_device_id, t.updated_at, t.deleted_at, t.version, EXISTS (SELECT 1 FROM task_blocks b WHERE b.task_id = t.id AND b.ended_at IS NULL AND b.deleted_at IS NULL), t.workspace_id, t.priority_id, t.home_workspace_id FROM tasks t ORDER BY t.sort_order, t.created_at";
+const BLOCK_SELECT_SQL: &str = "SELECT id, task_id, started_at, ended_at, reason, note, resolution_reason, created_at, updated_at, version, deleted_at FROM task_blocks WHERE id = ?1";
 const SESSION_SELECT_SQL: &str =
     "SELECT id, task_id, started_at, ended_at, note, created_at FROM work_sessions WHERE id = ?1";
 
@@ -613,6 +639,7 @@ fn now() -> String {
 
 fn validate_new_task(input: &NewTask) -> Result<()> {
     validate_task_fields(&input.title, input.estimated_active_minutes)?;
+    validate_due_date(input.due_date.as_deref())?;
     if input.created_device_id.trim().is_empty() {
         return Err(CoreError::InvalidInput("设备 ID 不能为空".into()));
     }
@@ -627,6 +654,14 @@ fn validate_task_fields(title: &str, estimated: Option<i64>) -> Result<()> {
     }
     Ok(())
 }
+fn validate_due_date(due_date: Option<&str>) -> Result<()> {
+    if let Some(value) = due_date {
+        NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .map_err(|_| CoreError::InvalidInput("预计完成日期必须是 YYYY-MM-DD".into()))?;
+    }
+    Ok(())
+}
+
 fn validate_status_change(task: &Task, status: TaskStatus) -> Result<()> {
     if task.deleted_at.is_some() {
         return Err(CoreError::InvalidState("已删除任务不能修改".into()));
@@ -662,21 +697,22 @@ fn map_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         notes: row.get(2)?,
         review_notes: row.get(3)?,
         estimated_active_minutes: row.get(4)?,
-        created_at: row.get(5)?,
-        started_at: row.get(6)?,
-        completed_at: row.get(7)?,
-        status: TaskStatus::parse(&row.get::<_, String>(8)?).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
+        due_date: row.get(5)?,
+        created_at: row.get(6)?,
+        started_at: row.get(7)?,
+        completed_at: row.get(8)?,
+        status: TaskStatus::parse(&row.get::<_, String>(9)?).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(e))
         })?,
-        sort_order: row.get(9)?,
-        created_device_id: row.get(10)?,
-        updated_at: row.get(11)?,
-        deleted_at: row.get(12)?,
-        version: row.get(13)?,
-        is_blocked: row.get(14)?,
-        workspace_id: row.get(15)?,
-        priority_id: row.get(16)?,
-        home_workspace_id: row.get(17)?,
+        sort_order: row.get(10)?,
+        created_device_id: row.get(11)?,
+        updated_at: row.get(12)?,
+        deleted_at: row.get(13)?,
+        version: row.get(14)?,
+        is_blocked: row.get(15)?,
+        workspace_id: row.get(16)?,
+        priority_id: row.get(17)?,
+        home_workspace_id: row.get(18)?,
     })
 }
 fn map_block(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskBlock> {
@@ -687,10 +723,11 @@ fn map_block(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskBlock> {
         ended_at: row.get(3)?,
         reason: row.get(4)?,
         note: row.get(5)?,
-        created_at: row.get(6)?,
-        updated_at: row.get(7)?,
-        version: row.get(8)?,
-        deleted_at: row.get(9)?,
+        resolution_reason: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+        version: row.get(9)?,
+        deleted_at: row.get(10)?,
     })
 }
 fn map_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkSession> {
