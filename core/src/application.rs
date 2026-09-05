@@ -137,8 +137,13 @@ impl TaskService {
     }
 
     // ===== 优先级分级 =====
-    pub fn create_priority(&self, name: &str, color: Option<&str>) -> Result<Priority> {
-        self.store.create_priority(name, color, now())
+    pub fn create_priority(
+        &self,
+        workspace_id: &str,
+        name: &str,
+        color: Option<&str>,
+    ) -> Result<Priority> {
+        self.store.create_priority(workspace_id, name, color, now())
     }
     pub fn priorities(&self, include_deleted: bool) -> Result<Vec<Priority>> {
         self.store.list_priorities(include_deleted)

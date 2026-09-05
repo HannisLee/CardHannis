@@ -129,7 +129,29 @@ mod tests {
         assert_eq!(tasks[0].workspace_id.as_deref(), Some("daily"));
         assert_eq!(tasks[0].priority_id.as_deref(), Some("P1"));
         assert_eq!(service.workspaces(false).unwrap().len(), 3);
-        assert_eq!(service.priorities(false).unwrap().len(), 3);
+        let priorities = service.priorities(false).unwrap();
+        assert_eq!(priorities.len(), 6);
+        assert_eq!(
+            priorities
+                .iter()
+                .filter(|priority| priority.workspace_id == "daily")
+                .count(),
+            3
+        );
+        assert_eq!(
+            priorities
+                .iter()
+                .filter(|priority| priority.workspace_id == "work")
+                .count(),
+            3
+        );
+        assert_eq!(
+            priorities
+                .iter()
+                .find(|priority| priority.id == "P1")
+                .map(|priority| priority.workspace_id.as_str()),
+            Some("daily")
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -144,6 +166,14 @@ mod tests {
         // 新建/重命名/删除工作区
         let ws = service.create_workspace("学习").unwrap();
         assert_eq!(ws.name, "学习");
+        let ws_priority_ids: Vec<String> = service
+            .priorities(false)
+            .unwrap()
+            .into_iter()
+            .filter(|priority| priority.workspace_id == ws.id)
+            .map(|priority| priority.id)
+            .collect();
+        assert_eq!(ws_priority_ids.len(), 3);
         let renamed = service
             .rename_workspace(&ws.id, ws.version, "研究")
             .unwrap();
@@ -152,6 +182,11 @@ mod tests {
             .delete_workspace(&renamed.id, renamed.version)
             .unwrap();
         assert!(service.workspace(&ws.id).unwrap().is_none());
+        assert!(
+            ws_priority_ids
+                .iter()
+                .all(|priority_id| service.priority(priority_id).unwrap().is_none())
+        );
 
         // 有任务的工作区不能删
         let ws2 = service.create_workspace("项目A").unwrap();
@@ -172,14 +207,41 @@ mod tests {
         let err = service.delete_workspace(&ws2.id, ws2.version).unwrap_err();
         assert!(matches!(err, CoreError::InvalidState(_)));
 
-        // 分级：新建/改名改色/删除规则
-        let p = service.create_priority("P3", Some("#5c7699")).unwrap();
+        // 分级仅属于项目A；日常工作区的分级不能用于项目A任务。
+        let daily_priority = service
+            .priorities(false)
+            .unwrap()
+            .into_iter()
+            .find(|priority| priority.workspace_id == "daily")
+            .unwrap();
+        let err = service
+            .create(CreateTaskCommand {
+                title: "跨工作区分级".into(),
+                notes: None,
+                estimated_active_minutes: None,
+                due_date: None,
+                sort_order: 0,
+                created_device_id: "test-device".into(),
+                workspace_id: Some(ws2.id.clone()),
+                priority_id: Some(daily_priority.id),
+            })
+            .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)));
+
+        // 分级：新建/改名改色/删除规则只影响当前工作区。
+        let p = service
+            .create_priority(&ws2.id, "P3", Some("#5c7699"))
+            .unwrap();
         let updated = service
             .update_priority(&p.id, p.version, "长期", Some("#7a5ea6"))
             .unwrap();
         assert_eq!(updated.name, "长期");
-        // 最后一个分级不能删
-        let others = service.priorities(false).unwrap();
+        let others: Vec<Priority> = service
+            .priorities(false)
+            .unwrap()
+            .into_iter()
+            .filter(|priority| priority.workspace_id == ws2.id)
+            .collect();
         assert_eq!(others.len(), 4);
         for other in &others {
             if other.id != p.id {
@@ -187,17 +249,27 @@ mod tests {
                 assert!(err.is_ok()); // 空分级可删
             }
         }
-        let last = service.priorities(false).unwrap();
+        let last: Vec<Priority> = service
+            .priorities(false)
+            .unwrap()
+            .into_iter()
+            .filter(|priority| priority.workspace_id == ws2.id)
+            .collect();
         assert_eq!(last.len(), 1);
         assert_eq!(last[0].id, p.id);
-        let err = service
-            .delete_priority(&p.id, updated.version + 3)
-            .unwrap_err();
         assert!(matches!(
-            err,
-            CoreError::VersionConflict | CoreError::InvalidState(_)
+            service.delete_priority(&p.id, updated.version),
+            Err(CoreError::InvalidState(_))
         ));
-        assert!(service.delete_priority(&p.id, last[0].version).is_err()); // 剩最后一个
+        assert_eq!(
+            service
+                .priorities(false)
+                .unwrap()
+                .into_iter()
+                .filter(|priority| priority.workspace_id == "daily")
+                .count(),
+            3
+        );
     }
 
     #[test]

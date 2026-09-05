@@ -27,7 +27,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 ├── package.json            # 根级 npm 脚本和 Tauri CLI
 ├── README.md               # Rust 核心库说明与验证命令
 ├── core/
-│   ├── migrations/         # SQLite 迁移；当前为 0006_due_date_and_unblock_reason.sql
+│   ├── migrations/         # SQLite 迁移；当前为 0007_workspace_scoped_priorities.sql
 │   └── src/
 │       ├── application.rs  # TaskService、命令 DTO
 │       ├── domain.rs       # Task、TaskBlock、WorkSession 等类型
@@ -74,7 +74,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 桌面端内置 Web 设置控制台：默认关闭，仅监听 `127.0.0.1:1421`，设置页点击「前往」后启动并打开浏览器，5 分钟无 HTTP 操作自动关闭；Web 端不提供任务基础操作。
 - 桌面端以 macOS 菜单栏常驻图标运行，不再显示 Dock 图标；左键菜单栏图标可显示/隐藏主窗口，右键菜单可退出。
 - Windows 端使用系统托盘常驻图标；关闭按钮隐藏主窗口，应用仍保留在托盘。
-- 桌面端（`ui/src`）当前为 350×400 置顶便签小窗：横向工作区标签 + 纵向可收起分级 + 单行条目（标题+状态/元信息+行内按钮）；已完成任务归档到内置「已完成」工作区；失焦透明度设置（鼠标移入便签恢复 100%，移出按设置值变透明）、自绘拖拽；应用内弹窗（webview 无原生 prompt/confirm）。
+- 桌面端（`ui/src`）当前为 340×400 置顶便签小窗：横向工作区标签 + 纵向可收起分级 + 单行条目（标题+状态/元信息+行内按钮）；已完成任务归档到内置「已完成」工作区；标题栏始终不透明，下面的内容区支持失焦透明度和字号微调，透明度为 0 时须从标题栏唤醒；自绘拖拽；应用内弹窗（webview 无原生 prompt/confirm）。
 
 ## 领域不变量
 
@@ -96,7 +96,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 迁移通过 `schema_migrations` 表记录执行进度，Rust 与 Python 两端都按文件名顺序执行 `core/migrations/*.sql`；新增迁移直接加文件，不要改历史文件。
 - 任务状态共四态：`pending` / `in_progress` / `waiting`（等待中，解除阻塞后的默认落点）/ `completed`；阻塞不是状态，由未结束的阻塞记录派生。
 - 已完成任务可通过 `reopen`（`TaskService::reopen` / 桌面 `reopen_task` 命令）回到 `pending`。
-- `workspaces`、`priorities` 是用户可管理实体（增/改名/软删）；删除前提：工作区无任务、分级无任务且至少保留一个分级。任务的 `workspace_id`/`priority_id` 可为空（旧数据由迁移回填为 `daily`/`P1`）。
+- `workspaces`、`priorities` 是用户可管理实体（增/改名/软删）；每个分级只属于一个工作区，新建工作区自动创建 P0/P1/P2。删除前提：工作区无任务、分级无任务且该工作区至少保留一个分级；任务所选分级必须属于其工作区。任务的 `workspace_id`/`priority_id` 可为空（旧数据由迁移回填并按工作区拆分）。
 
 ## 常用命令
 

@@ -7,11 +7,25 @@ const app = document.querySelector('#app');
 const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, finishedSessionMinutesByTask: {}, sessionMinutesByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null, unblockingTaskId: null };
 const COLLAPSE_KEY = 'cardha…e.v2';
 const OPACITY_KEY = 'cardhannis.sticky.opacity.v1';
-let unfocusedOpacity = Number(localStorage.getItem(OPACITY_KEY) || 100);
+// v2 将用户确认的旧版 +2px 视觉大小固化为新的零点。
+const FONT_SIZE_KEY = 'cardhannis.ui.font-delta.v2';
+const FONT_SIZE_MIN = -2;
+const FONT_SIZE_MAX = 1.5;
+let unfocusedOpacity = normalizeOpacity(localStorage.getItem(OPACITY_KEY));
+let fontSizeDelta = normalizeFontSizeDelta(localStorage.getItem(FONT_SIZE_KEY));
 let mouseInside = false;
-function applySheetOpacity() {
-  const opacity = mouseInside ? 100 : unfocusedOpacity;
-  document.documentElement.style.setProperty('--sheet-opacity', (opacity / 100).toFixed(2));
+let mouseInTitleBar = false;
+let zeroOpacityExpanded = false;
+function normalizeOpacity(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 100;
+  return Math.min(100, Math.max(0, Math.round(parsed / 5) * 5));
+}
+function applyContentOpacity() {
+  const expanded = unfocusedOpacity === 0 ? zeroOpacityExpanded : mouseInside;
+  const opacity = expanded ? 100 : unfocusedOpacity;
+  document.documentElement.style.setProperty('--content-opacity', (opacity / 100).toFixed(2));
+  document.documentElement.classList.toggle('content-hidden', opacity === 0);
 }
 let collapsed = {};
 try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch {}
@@ -25,7 +39,6 @@ const ICONS = {
   add: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5.25v13.5M18.75 12H5.25"/></svg>',
   pin: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" transform="scale(0.6667)"><path d="M30 30H6V6h16V4H6a2 2 0 0 0-2 2v24a2 2 0 0 0 2 2h24a2 2 0 0 0 2-2V14h-2Z"/><path d="m33.57 9.33l-7-7a1 1 0 0 0-1.41 1.41l1.38 1.38l-4 4c-2-.87-4.35.14-5.92 1.68l-.72.71l3.54 3.54l-3.67 3.67l1.41 1.41l3.67-3.67L24.37 20l.71-.72c1.54-1.57 2.55-3.91 1.68-5.92l4-4l1.38 1.38a1 1 0 1 0 1.41-1.41Z"/></g></svg>',
   settings: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2"/><circle cx="12" cy="12" r="3"/></g></svg>',
-  calendar: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></g></svg>',
   clock: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></g></svg>',
 };
 const PRIO_PALETTE = ['#5c7699', '#7a5ea6', '#3d735e', '#a0632f', '#8a5a7a', '#4e7d8a'];
@@ -33,7 +46,24 @@ const PRIO_PALETTE = ['#5c7699', '#7a5ea6', '#3d735e', '#a0632f', '#8a5a7a', '#4
 function isTauri() { return Boolean(window.__TAURI_INTERNALS__); }
 function theWindow() { return isTauri() ? getCurrentWindow() : null; }
 function escapeHtml(value = '') { return String(value).replace(/[&<>'"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[c])); }
-function formatDate(value) { return value ? new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(new Date(value)) : ''; }
+function errorMessage(error, fallback) {
+  if (typeof error === 'string' && error.trim()) return error;
+  if (error && typeof error.message === 'string' && error.message.trim()) return error.message;
+  return fallback;
+}
+function normalizeFontSizeDelta(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, Math.round(parsed * 2) / 2));
+}
+function formatFontSizeDelta(value) {
+  if (value === 0) return '默认';
+  return `${value > 0 ? '+' : ''}${value}px`;
+}
+function applyFontSize() {
+  document.documentElement.style.setProperty('--ui-font-delta', `${fontSizeDelta}px`);
+}
+applyFontSize();
 function formatEstimatedHours(minutes) {
   if (minutes === null || minutes === undefined) return '未估时';
   const hours = Number(minutes) / 60;
@@ -83,6 +113,9 @@ function totalSessionMinutes(task, sessions) {
 function prioName(task) {
   return (state.prios.find((p) => p.id === task.priority_id) || {}).name || '—';
 }
+function workspacePriorities(workspaceId = state.activeWs) {
+  return state.prios.filter((priority) => priority.workspace_id === workspaceId);
+}
 function pillInfo(task) {
   if (task.is_blocked) return { cls: 'blocked', label: '阻塞' };
   return { in_progress: { cls: 'in_progress', label: '进行' }, completed: { cls: 'completed', label: '完成' } }[task.status] || { cls: 'pending', label: '待办' };
@@ -93,14 +126,14 @@ function row(task) {
   const done = task.status === 'completed';
   const block = state.blocksByTask[task.id];
   const pill = pillInfo(task);
-  const tip = escapeHtml([task.title, task.is_blocked && block && block.reason ? `阻塞：${block.reason}` : '', task.due_date ? `预计完成：${task.due_date}` : '', task.notes || '', task.estimated_active_minutes != null ? formatEstimatedHours(task.estimated_active_minutes) : ''].filter(Boolean).join(' ｜ '));
+  const tip = escapeHtml([task.title, task.is_blocked && block && block.reason ? `阻塞：${block.reason}` : '', task.notes || '', task.estimated_active_minutes != null ? formatEstimatedHours(task.estimated_active_minutes) : ''].filter(Boolean).join(' ｜ '));
   const d = `data-id="${task.id}"`;
   const v = `data-version="${task.version}"`;
   let actions = '';
   if (done) {
     actions = `<button class="nb" data-action="reopen" ${d} ${v} title="重新打开" type="button">↺</button>`;
   } else if (task.is_blocked) {
-    actions = `${block ? `<button class="nb" data-action="unblock" data-task-id="${task.id}" data-block-id="${block.id}" data-block-version="${block.version}" title="解除阻塞 → 等待中" type="button">⏏</button>` : ''}
+    actions = `${block ? `<button class="nb" data-action="unblock" data-task-id="${task.id}" data-block-id="${block.id}" data-block-version="${block.version}" title="解除阻塞 → 待办" type="button">⏏</button>` : ''}
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">${ICONS.done}</button>`;
   } else if (task.status === 'in_progress') {
     actions = `<button class="nb" data-action="pause" ${d} ${v} title="暂停（回到待办）" type="button">${ICONS.pause}</button>
@@ -111,13 +144,11 @@ function row(task) {
       <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">${ICONS.block}</button>
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">${ICONS.done}</button>`;
   }
-  const dueChip = !done && task.due_date
-    ? `<span class="due-chip" title="预计完成日期">${ICONS.calendar}<span>${escapeHtml(formatDate(task.due_date))}</span></span>` : '';
   const activeTimer = !done && task.status === 'in_progress' && !task.is_blocked
     ? `<span class="active-timer" data-active-timer="${task.id}" title="累计活动时间（含历史会话）">${ICONS.clock}<span>${fmtDuration(state.sessionMinutesByTask[task.id] || 0)}</span></span>` : '';
   const statusSlot = done
     ? `<span class="done-meta" title="分级 · 完成时间 · 实际工作时间">${escapeHtml(prioName(task))} · ${fmtDateTime(task.completed_at)} · ${fmtDuration(state.sessionMinutesByTask[task.id])}</span>`
-    : `<span class="meta-pills">${dueChip}${activeTimer}<span class="pill ${pill.cls}">${pill.label}</span></span>`;
+    : `<span class="meta-pills">${activeTimer}<span class="pill ${pill.cls}">${pill.label}</span></span>`;
   return `<div class="row ${done ? 'done' : ''}" data-id="${task.id}" data-version="${task.version}" title="${tip}">
     <span class="rt">${escapeHtml(task.title)}</span>
     ${statusSlot}
@@ -126,14 +157,15 @@ function row(task) {
 }
 
 function render() {
-  const opacity = Number(localStorage.getItem(OPACITY_KEY) || 100);
+  const opacity = normalizeOpacity(localStorage.getItem(OPACITY_KEY));
   const ws = state.workspaces.find((w) => w.id === state.activeWs) || state.workspaces[0];
   if (ws) state.activeWs = ws.id;
   const wsTasks = state.tasks.filter((t) => t.workspace_id === (ws ? ws.id : null));
   const isDoneWs = ws ? ws.id === 'done' : false;
   const doneRows = isDoneWs ? [...wsTasks].sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || '')) : [];
-  const groups = state.prios.map((p, i) => ({ p, color: prioColor(p, i), tasks: wsTasks.filter((t) => t.priority_id === p.id) }));
-  const unsorted = wsTasks.filter((t) => !state.prios.some((p) => p.id === t.priority_id));
+  const localPrios = workspacePriorities(ws?.id);
+  const groups = localPrios.map((p, i) => ({ p, color: prioColor(p, i), tasks: wsTasks.filter((t) => t.priority_id === p.id) }));
+  const unsorted = wsTasks.filter((t) => !localPrios.some((p) => p.id === t.priority_id));
   app.innerHTML = `<div class="win"><div class="win-sheet">
     <header class="win-bar">
       <span class="win-brand">${ICONS.logo}CardHannis</span>
@@ -145,6 +177,7 @@ function render() {
         <button id="btn-close" title="关闭" type="button">✕</button>
       </div>
     </header>
+    <div class="win-content">
     <nav class="ws-row">
       <div class="ws-tabs">${state.workspaces.map((w) => {
         const open = w.id === 'done' ? state.tasks.filter((t) => t.workspace_id === w.id).length : state.tasks.filter((t) => t.workspace_id === w.id && t.status !== 'completed').length;
@@ -168,6 +201,7 @@ function render() {
       }).join('')}
     </div>
     <footer class="win-foot"><span class="dot"></span><span>${isTauri() ? '本地数据库' : '浏览器预览'}</span><span class="foot-right">${new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' })}</span></footer>
+  </div>
   </div>
   </div>
   <dialog id="task-dialog">
@@ -214,8 +248,11 @@ function render() {
   <dialog id="settings-dialog">
     <form method="dialog" class="dlg-card">
       <h2>设置</h2>
-      <label>鼠标离开时不透明度 <span id="opacity-val">${opacity}%</span>
-        <input type="range" id="opacity-range" min="10" max="100" step="5" value="${opacity}" />
+      <label class="set-slider"><span class="set-slider-head"><span>鼠标离开时不透明度</span><output id="opacity-val">${opacity}%</output></span>
+        <input type="range" id="opacity-range" min="0" max="100" step="5" value="${opacity}" />
+      </label>
+      <label class="set-slider"><span class="set-slider-head"><span>界面字体大小</span><output id="font-size-val">${formatFontSizeDelta(fontSizeDelta)}</output></span>
+        <input type="range" id="font-size-range" min="${FONT_SIZE_MIN}" max="${FONT_SIZE_MAX}" step="0.5" value="${fontSizeDelta}" />
       </label>
       <div class="set-web">
         <span>Web 设置</span>
@@ -227,21 +264,47 @@ function render() {
   <div id="toast" class="toast" role="status"></div>`;
 
   unfocusedOpacity = opacity;
-  applySheetOpacity();
+  applyContentOpacity();
+  document.querySelector('.win')?.addEventListener('mouseenter', () => {
+    mouseInside = true;
+    if (unfocusedOpacity !== 0) applyContentOpacity();
+  });
+  document.querySelector('.win')?.addEventListener('mouseleave', () => {
+    mouseInside = false;
+    mouseInTitleBar = false;
+    zeroOpacityExpanded = false;
+    applyContentOpacity();
+  });
+  document.querySelector('.win-bar')?.addEventListener('mouseenter', () => {
+    mouseInside = true;
+    mouseInTitleBar = true;
+    if (unfocusedOpacity === 0) zeroOpacityExpanded = true;
+    applyContentOpacity();
+  });
+  document.querySelector('.win-bar')?.addEventListener('mouseleave', () => {
+    mouseInTitleBar = false;
+  });
   document.querySelector('#btn-new')?.addEventListener('click', () => openTaskDialog(null));
   document.querySelector('#btn-settings')?.addEventListener('click', () => document.querySelector('#settings-dialog').showModal());
   document.querySelector('#opacity-range')?.addEventListener('input', (e) => {
-    const v = Number(e.target.value);
+    const v = normalizeOpacity(e.target.value);
     localStorage.setItem(OPACITY_KEY, String(v));
     document.querySelector('#opacity-val').textContent = `${v}%`;
     unfocusedOpacity = v;
-    applySheetOpacity();
+    zeroOpacityExpanded = v === 0 && mouseInTitleBar;
+    applyContentOpacity();
+  });
+  document.querySelector('#font-size-range')?.addEventListener('input', (e) => {
+    fontSizeDelta = normalizeFontSizeDelta(e.target.value);
+    localStorage.setItem(FONT_SIZE_KEY, String(fontSizeDelta));
+    document.querySelector('#font-size-val').textContent = formatFontSizeDelta(fontSizeDelta);
+    applyFontSize();
   });
   document.querySelector('#btn-web')?.addEventListener('click', async () => {
     try {
       await call('open_web_console');
       notify('已打开 Web 设置');
-    } catch (error) { notify(error.message || '无法打开 Web 设置'); }
+    } catch (error) { notify(errorMessage(error, '无法打开 Web 设置')); }
   });
   document.querySelector('#btn-pin')?.addEventListener('click', togglePin);
   document.querySelector('#btn-min')?.addEventListener('click', () => theWindow()?.hide());
@@ -277,11 +340,16 @@ async function addWorkspace() {
       document.querySelector(`.ws-tab[data-ws="${CSS.escape(created.id)}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     });
     notify(`已创建工作区「${trimmed}」`);
-  } catch (error) { notify(error.message || '创建失败'); }
+  } catch (error) { notify(errorMessage(error, '创建失败')); }
 }
 async function removeWorkspace(id, expectedVersion) {
   const ws = state.workspaces.find((w) => w.id === id);
-  const ok = await openConfirm(`删除工作区「${ws ? ws.name : ''}」？其中任务会一并移除。`);
+  const taskCount = state.tasks.filter((task) => task.workspace_id === id).length;
+  if (taskCount > 0) {
+    notify(`工作区还有 ${taskCount} 个任务，请先移走或删除`);
+    return;
+  }
+  const ok = await openConfirm(`删除空工作区「${ws ? ws.name : ''}」？`);
   if (!ok) return;
   try {
     await call('delete_workspace', { id, expectedVersion });
@@ -289,17 +357,19 @@ async function removeWorkspace(id, expectedVersion) {
     if (state.activeWs === id) state.activeWs = state.workspaces[0]?.id || null;
     render();
     notify('工作区已删除');
-  } catch (error) { notify(error.message || '删除失败'); }
+  } catch (error) { notify(errorMessage(error, '删除失败')); }
 }
 async function addPriority() {
+  if (!state.activeWs || state.activeWs === 'done') return;
   const trimmed = await openPrompt('添加分级', '名称（如：P3 / 紧急）');
   if (!trimmed) return;
   try {
-    await call('create_priority', { name: trimmed, color: PRIO_PALETTE[state.prios.length % PRIO_PALETTE.length] });
+    const localPrios = workspacePriorities();
+    await call('create_priority', { workspaceId: state.activeWs, name: trimmed, color: PRIO_PALETTE[localPrios.length % PRIO_PALETTE.length] });
     await loadMeta();
     render();
     notify(`已添加分级「${trimmed}」`);
-  } catch (error) { notify(error.message || '添加失败'); }
+  } catch (error) { notify(errorMessage(error, '添加失败')); }
 }
 async function handleGroupTool(button) {
   const prioId = button.dataset.prio;
@@ -314,15 +384,14 @@ async function handleGroupTool(button) {
       await loadMeta(); render(); notify('分级已重命名'); return;
     }
     if (button.dataset.gact === 'grp-del') {
-      return;
       await call('delete_priority', { id: prioId, expectedVersion: prio.version });
       await loadMeta(); render(); notify('分级已删除');
     }
-  } catch (error) { notify(error.message || '操作失败'); }
+  } catch (error) { notify(errorMessage(error, '操作失败')); }
 }
 
 function openTaskDialog(prioId) {
-  state.newTaskTarget = { ws: state.activeWs, prio: prioId || state.prios[0]?.id || null };
+  state.newTaskTarget = { ws: state.activeWs, prio: prioId || workspacePriorities()[0]?.id || null };
   const form = document.querySelector('#task-form');
   form.reset();
   document.querySelector('#task-dialog').showModal();
@@ -332,7 +401,7 @@ async function submitTask() {
   const form = document.querySelector('#task-form');
   const title = form.querySelector('[name="title"]').value.trim();
   if (!title) { notify('标题不能为空'); return; }
-  const target = state.newTaskTarget || { ws: state.activeWs, prio: state.prios[0]?.id || null };
+  const target = state.newTaskTarget || { ws: state.activeWs, prio: workspacePriorities()[0]?.id || null };
   try {
     await call('create_task', {
       input: {
@@ -347,7 +416,7 @@ async function submitTask() {
     document.querySelector('#task-dialog').close();
     await loadTasks();
     notify('任务已添加');
-  } catch (error) { notify(error.message || '创建任务失败'); }
+  } catch (error) { notify(errorMessage(error, '创建任务失败')); }
 }
 
 async function togglePin() {
@@ -358,7 +427,7 @@ async function togglePin() {
     await w.setAlwaysOnTop(pinned);
     render();
     notify(pinned ? '已置顶' : '已取消置顶');
-  } catch (error) { pinned = !pinned; notify(error.message || '置顶失败'); }
+  } catch (error) { pinned = !pinned; notify(errorMessage(error, '置顶失败')); }
 }
 
 
@@ -385,7 +454,7 @@ async function handleAction(button) {
     if (action === 'block') { openBlockDialog(id); return; }
     if (action === 'unblock') { openUnblockDialog(button.dataset.taskId || id); return; }
     await loadTasks();
-  } catch (error) { notify(error.message || '操作失败'); }
+  } catch (error) { notify(errorMessage(error, '操作失败')); }
 }
 
 function openBlockDialog(taskId) {
@@ -408,7 +477,7 @@ async function submitBlock() {
     state.blockingTaskId = null;
     await loadTasks();
     notify('已标记阻塞');
-  } catch (error) { notify(error.message || '标记阻塞失败'); }
+  } catch (error) { notify(errorMessage(error, '标记阻塞失败')); }
 }
 
 function openUnblockDialog(taskId) {
@@ -438,7 +507,7 @@ async function submitUnblock() {
     state.unblockingTaskId = null;
     await loadTasks();
     notify('已解除阻塞，回到待办');
-  } catch (error) { notify(error.message || '解除阻塞失败'); }
+  } catch (error) { notify(errorMessage(error, '解除阻塞失败')); }
 }
 
 async function call(command, args = {}) { return isTauri() ? invoke(command, args) : previewCommand(command, args); }
@@ -447,17 +516,31 @@ async function previewCommand(command, args) {
   if (command === 'list_tasks') return state.tasks;
   if (command === 'list_workspaces') return state.workspaces;
   if (command === 'list_priorities') return state.prios;
-  if (command === 'create_workspace') { const ws = { id: crypto.randomUUID(), name: args.name, sort_order: state.workspaces.length, builtin: false, version: 1 }; state.workspaces.push(ws); return ws; }
+  if (command === 'create_workspace') {
+    const ws = { id: crypto.randomUUID(), name: args.name, sort_order: state.workspaces.length, builtin: false, version: 1 };
+    state.workspaces.push(ws);
+    [['P0', '#b0432f'], ['P1', '#b16d42'], ['P2', '#8f9a90']].forEach(([name, color], sortOrder) => {
+      state.prios.push({ id: crypto.randomUUID(), workspace_id: ws.id, name, color, sort_order: sortOrder, version: 1 });
+    });
+    return ws;
+  }
   if (command === 'rename_workspace') { const w = state.workspaces.find((x) => x.id === args.id); if (w) { w.name = args.name; w.version += 1; } return w; }
   if (command === 'delete_workspace') {
     if (state.tasks.some((t) => t.workspace_id === args.id)) throw new Error('工作区还有任务，先移走再删除');
     state.workspaces = state.workspaces.filter((w) => w.id !== args.id);
+    state.prios = state.prios.filter((p) => p.workspace_id !== args.id);
   }
-  if (command === 'create_priority') { const p = { id: crypto.randomUUID(), name: args.name, color: args.color || null, sort_order: state.prios.length, version: 1 }; state.prios.push(p); return p; }
+  if (command === 'create_priority') {
+    const localPrios = state.prios.filter((priority) => priority.workspace_id === args.workspaceId);
+    const p = { id: crypto.randomUUID(), workspace_id: args.workspaceId, name: args.name, color: args.color || null, sort_order: localPrios.length, version: 1 };
+    state.prios.push(p);
+    return p;
+  }
   if (command === 'update_priority') { const p = state.prios.find((x) => x.id === args.id); if (p) { p.name = args.name; p.color = args.color ?? p.color; p.version += 1; } return p; }
   if (command === 'delete_priority') {
     if (state.tasks.some((t) => t.priority_id === args.id)) throw new Error('该分级还有任务，先移走再删除');
-    if (state.prios.length <= 1) throw new Error('至少要保留一个分级');
+    const priority = state.prios.find((p) => p.id === args.id);
+    if (state.prios.filter((p) => p.workspace_id === priority?.workspace_id).length <= 1) throw new Error('每个工作区至少要保留一个分级');
     state.prios = state.prios.filter((p) => p.id !== args.id);
   }
   if (command === 'create_task') {
@@ -484,9 +567,12 @@ function seedPreviewMeta() {
     { id: 'done', name: '已完成', sort_order: 99, builtin: true, version: 1 },
   ];
   state.prios = [
-    { id: 'P0', name: 'P0', color: '#b0432f', sort_order: 0, version: 1 },
-    { id: 'P1', name: 'P1', color: '#b16d42', sort_order: 1, version: 1 },
-    { id: 'P2', name: 'P2', color: '#8f9a90', sort_order: 2, version: 1 },
+    { id: 'P0', workspace_id: 'daily', name: 'P0', color: '#b0432f', sort_order: 0, version: 1 },
+    { id: 'P1', workspace_id: 'daily', name: 'P1', color: '#b16d42', sort_order: 1, version: 1 },
+    { id: 'P2', workspace_id: 'daily', name: 'P2', color: '#8f9a90', sort_order: 2, version: 1 },
+    { id: 'work-P0', workspace_id: 'work', name: 'P0', color: '#b0432f', sort_order: 0, version: 1 },
+    { id: 'work-P1', workspace_id: 'work', name: 'P1', color: '#b16d42', sort_order: 1, version: 1 },
+    { id: 'work-P2', workspace_id: 'work', name: 'P2', color: '#8f9a90', sort_order: 2, version: 1 },
   ];
 }
 
@@ -627,7 +713,7 @@ function openWorkspaceMenu(x, y, ws) {
       try {
         await call('rename_workspace', { id: ws.id, expectedVersion: ws.version, name });
         await loadMeta(); render(); notify('工作区已重命名');
-      } catch (error) { notify(error.message || '重命名失败'); }
+      } catch (error) { notify(errorMessage(error, '重命名失败')); }
     } else if (btn.dataset.ctx === 'ws-del') {
       await removeWorkspace(ws.id, ws.version);
     }
@@ -664,6 +750,11 @@ function openPrioMenu(x, y, prioId) {
     closeContextMenu();
     const prio = state.prios.find((p) => p.id === prioId);
     if (!prio) return;
+    const taskCount = state.tasks.filter((task) => task.priority_id === prioId).length;
+    if (taskCount > 0) {
+      notify(`该分级仍被 ${taskCount} 个任务使用（含已完成）`);
+      return;
+    }
     const ok = await openConfirm(`删除空分级「${prio.name}」？`);
     if (!ok) return;
     try {
@@ -671,7 +762,7 @@ function openPrioMenu(x, y, prioId) {
       await loadMeta();
       render();
       notify('分级已删除');
-    } catch (error) { notify(error.message || '删除失败'); }
+    } catch (error) { notify(errorMessage(error, '删除失败')); }
   });
   ctxMenu = menu;
 }
@@ -682,7 +773,7 @@ async function deleteTask(id, expectedVersion) {
     await call('delete_task', { id, expectedVersion });
     await loadTasks();
     notify('任务已删除');
-  } catch (error) { notify(error.message || '删除失败'); }
+  } catch (error) { notify(errorMessage(error, '删除失败')); }
 }
 document.addEventListener('contextmenu', (e) => {
   const r = e.target.closest('.row');
@@ -732,18 +823,32 @@ async function updateMouseInside() {
   const w = theWindow();
   if (!w) return;
   try {
-    const [cursor, position, size] = await Promise.all([
+    const [cursor, position, size, scale] = await Promise.all([
       cursorPosition(),
       w.outerPosition(),
       w.outerSize(),
+      w.scaleFactor(),
     ]);
     const inside = cursor.x >= position.x
       && cursor.x < position.x + size.width
       && cursor.y >= position.y
       && cursor.y < position.y + size.height;
-    if (inside !== mouseInside) {
+    const titleBar = document.querySelector('.win-bar')?.getBoundingClientRect();
+    const inTitleBar = Boolean(inside && titleBar
+      && cursor.x >= position.x + titleBar.left * scale
+      && cursor.x < position.x + titleBar.right * scale
+      && cursor.y >= position.y + titleBar.top * scale
+      && cursor.y < position.y + titleBar.bottom * scale);
+    if (unfocusedOpacity === 0) {
+      if (!inside) zeroOpacityExpanded = false;
+      else if (inTitleBar) zeroOpacityExpanded = true;
+    } else {
+      zeroOpacityExpanded = false;
+    }
+    if (inside !== mouseInside || inTitleBar !== mouseInTitleBar) {
       mouseInside = inside;
-      applySheetOpacity();
+      mouseInTitleBar = inTitleBar;
+      applyContentOpacity();
     }
   } catch {}
 }

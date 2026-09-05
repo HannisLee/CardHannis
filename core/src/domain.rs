@@ -103,6 +103,7 @@ pub struct Workspace {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Priority {
     pub id: String,
+    pub workspace_id: String,
     pub name: String,
     pub color: Option<String>,
     pub sort_order: i64,

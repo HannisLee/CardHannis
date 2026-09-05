@@ -29,6 +29,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0006_due_date_and_unblock_reason.sql",
         include_str!("../migrations/0006_due_date_and_unblock_reason.sql"),
     ),
+    (
+        "0007_workspace_scoped_priorities.sql",
+        include_str!("../migrations/0007_workspace_scoped_priorities.sql"),
+    ),
 ];
 
 /// SQLite 持久化实现。上层 GUI、Web API 和 CLI 不应直接拼 SQL，而应通过
@@ -86,8 +90,12 @@ impl TaskStore {
                 .ok_or_else(|| CoreError::WorkspaceNotFound(workspace_id.clone()))?;
         }
         if let Some(priority_id) = &input.priority_id {
-            self.get_priority(priority_id)?
+            let priority = self
+                .get_priority(priority_id)?
                 .ok_or_else(|| CoreError::PriorityNotFound(priority_id.clone()))?;
+            if input.workspace_id.as_deref() != Some(priority.workspace_id.as_str()) {
+                return Err(CoreError::InvalidInput("分级不属于当前工作区".into()));
+            }
         }
         let id = Uuid::new_v4().to_string();
         let connection = self.connection.lock().expect("database mutex poisoned");
@@ -133,6 +141,14 @@ impl TaskStore {
     ) -> Result<Task> {
         validate_task_fields(title, estimated_active_minutes)?;
         validate_due_date(due_date)?;
+        if let Some(priority_id) = priority_id {
+            let priority = self
+                .get_priority(priority_id)?
+                .ok_or_else(|| CoreError::PriorityNotFound(priority_id.to_owned()))?;
+            if workspace_id != Some(priority.workspace_id.as_str()) {
+                return Err(CoreError::InvalidInput("分级不属于当前工作区".into()));
+            }
+        }
         let connection = self.connection.lock().expect("database mutex poisoned");
         let changed = connection.execute(
             "UPDATE tasks SET title = ?1, notes = ?2, review_notes = ?3, estimated_active_minutes = ?4, due_date = ?11, sort_order = ?5, workspace_id = ?9, priority_id = ?10, home_workspace_id = COALESCE(?9, home_workspace_id), updated_at = ?6, version = version + 1 WHERE id = ?7 AND version = ?8 AND deleted_at IS NULL",
@@ -379,10 +395,22 @@ impl TaskStore {
         let id = Uuid::new_v4().to_string();
         let sort_order = self.next_workspace_sort_order()?;
         let connection = self.connection.lock().expect("database mutex poisoned");
-        connection.execute(
+        let tx = connection.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO workspaces (id, name, sort_order, builtin, created_at, updated_at) VALUES (?1, ?2, ?3, 0, ?4, ?4)",
             params![id, name.trim(), sort_order, created_at],
         )?;
+        for (name, color, sort_order) in [
+            ("P0", "#b0432f", 0_i64),
+            ("P1", "#b16d42", 1_i64),
+            ("P2", "#8f9a90", 2_i64),
+        ] {
+            tx.execute(
+                "INSERT INTO priorities (id, workspace_id, name, color, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                params![Uuid::new_v4().to_string(), id, name, color, sort_order, created_at],
+            )?;
+        }
+        tx.commit()?;
         drop(connection);
         self.get_workspace(&id)?
             .ok_or_else(|| CoreError::WorkspaceNotFound(id))
@@ -479,19 +507,38 @@ impl TaskStore {
                 "工作区还有任务，先移走再删除".into(),
             ));
         }
-        let changed = connection.execute(
+        let tx = connection.unchecked_transaction()?;
+        let changed = tx.execute(
             "UPDATE workspaces SET deleted_at = ?1, updated_at = ?1, version = version + 1 WHERE id = ?2 AND version = ?3 AND deleted_at IS NULL",
-            params![deleted_at, id, expected_version],
+            params![&deleted_at, id, expected_version],
         )?;
         if changed == 0 {
-            return Err(resolve_workspace_update_error(&connection, id));
+            let error = match tx
+                .query_row(
+                    "SELECT version FROM workspaces WHERE id = ?1 AND deleted_at IS NULL",
+                    params![id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+            {
+                Ok(Some(_)) => CoreError::VersionConflict,
+                Ok(None) => CoreError::WorkspaceNotFound(id.to_owned()),
+                Err(error) => CoreError::Database(error),
+            };
+            return Err(error);
         }
+        tx.execute(
+            "UPDATE priorities SET deleted_at = ?1, updated_at = ?1, version = version + 1 WHERE workspace_id = ?2 AND deleted_at IS NULL",
+            params![&deleted_at, id],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
     // ===== 优先级分级 =====
     pub fn create_priority(
         &self,
+        workspace_id: &str,
         name: &str,
         color: Option<&str>,
         created_at: impl Into<String>,
@@ -500,24 +547,26 @@ impl TaskStore {
             return Err(CoreError::InvalidInput("分级名称不能为空".into()));
         }
         let created_at = created_at.into();
+        self.get_workspace(workspace_id)?
+            .ok_or_else(|| CoreError::WorkspaceNotFound(workspace_id.to_owned()))?;
         let id = Uuid::new_v4().to_string();
-        let sort_order = self.next_priority_sort_order()?;
+        let sort_order = self.next_priority_sort_order(workspace_id)?;
         let connection = self.connection.lock().expect("database mutex poisoned");
         connection.execute(
-            "INSERT INTO priorities (id, name, color, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![id, name.trim(), color, sort_order, created_at],
+            "INSERT INTO priorities (id, workspace_id, name, color, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![id, workspace_id, name.trim(), color, sort_order, created_at],
         )?;
         drop(connection);
         self.get_priority(&id)?
             .ok_or_else(|| CoreError::PriorityNotFound(id))
     }
 
-    fn next_priority_sort_order(&self) -> Result<i64> {
+    fn next_priority_sort_order(&self, workspace_id: &str) -> Result<i64> {
         let connection = self.connection.lock().expect("database mutex poisoned");
         let max = connection
             .query_row(
-                "SELECT COALESCE(MAX(sort_order), -1) FROM priorities WHERE deleted_at IS NULL",
-                [],
+                "SELECT COALESCE(MAX(sort_order), -1) FROM priorities WHERE workspace_id = ?1 AND deleted_at IS NULL",
+                params![workspace_id],
                 |r| r.get::<_, i64>(0),
             )
             .unwrap_or(-1);
@@ -527,9 +576,9 @@ impl TaskStore {
     pub fn list_priorities(&self, include_deleted: bool) -> Result<Vec<Priority>> {
         let connection = self.connection.lock().expect("database mutex poisoned");
         let sql = if include_deleted {
-            "SELECT id, name, color, sort_order, created_at, updated_at, deleted_at, version FROM priorities ORDER BY sort_order, created_at"
+            "SELECT id, workspace_id, name, color, sort_order, created_at, updated_at, deleted_at, version FROM priorities ORDER BY workspace_id, sort_order, created_at"
         } else {
-            "SELECT id, name, color, sort_order, created_at, updated_at, deleted_at, version FROM priorities WHERE deleted_at IS NULL ORDER BY sort_order, created_at"
+            "SELECT id, workspace_id, name, color, sort_order, created_at, updated_at, deleted_at, version FROM priorities WHERE deleted_at IS NULL ORDER BY workspace_id, sort_order, created_at"
         };
         let mut statement = connection.prepare(sql)?;
         let rows = statement.query_map([], map_priority)?;
@@ -541,7 +590,7 @@ impl TaskStore {
         let connection = self.connection.lock().expect("database mutex poisoned");
         connection
             .query_row(
-                "SELECT id, name, color, sort_order, created_at, updated_at, deleted_at, version FROM priorities WHERE id = ?1 AND deleted_at IS NULL",
+                "SELECT id, workspace_id, name, color, sort_order, created_at, updated_at, deleted_at, version FROM priorities WHERE id = ?1 AND deleted_at IS NULL",
                 params![id],
                 map_priority,
             )
@@ -592,13 +641,20 @@ impl TaskStore {
                 "该分级还有任务，先移走再删除".into(),
             ));
         }
-        let remaining: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM priorities WHERE id <> ?1 AND deleted_at IS NULL",
+        let workspace_id: String = connection.query_row(
+            "SELECT workspace_id FROM priorities WHERE id = ?1 AND deleted_at IS NULL",
             params![id],
             |r| r.get(0),
         )?;
+        let remaining: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM priorities WHERE workspace_id = ?1 AND id <> ?2 AND deleted_at IS NULL",
+            params![workspace_id, id],
+            |r| r.get(0),
+        )?;
         if remaining == 0 {
-            return Err(CoreError::InvalidState("至少要保留一个分级".into()));
+            return Err(CoreError::InvalidState(
+                "每个工作区至少要保留一个分级".into(),
+            ));
         }
         let changed = connection.execute(
             "UPDATE priorities SET deleted_at = ?1, updated_at = ?1, version = version + 1 WHERE id = ?2 AND version = ?3 AND deleted_at IS NULL",
@@ -827,13 +883,14 @@ fn map_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
 fn map_priority(row: &rusqlite::Row<'_>) -> rusqlite::Result<Priority> {
     Ok(Priority {
         id: row.get(0)?,
-        name: row.get(1)?,
-        color: row.get(2)?,
-        sort_order: row.get(3)?,
-        created_at: row.get(4)?,
-        updated_at: row.get(5)?,
-        deleted_at: row.get(6)?,
-        version: row.get(7)?,
+        workspace_id: row.get(1)?,
+        name: row.get(2)?,
+        color: row.get(3)?,
+        sort_order: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+        deleted_at: row.get(7)?,
+        version: row.get(8)?,
     })
 }
 fn resolve_workspace_update_error(connection: &Connection, id: &str) -> CoreError {

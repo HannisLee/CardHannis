@@ -242,11 +242,12 @@ mod commands {
     #[tauri::command]
     pub fn create_priority(
         state: State<'_, AppState>,
+        workspace_id: String,
         name: String,
         color: Option<String>,
     ) -> Result<Priority, String> {
         service(&state)?
-            .create_priority(&name, color.as_deref())
+            .create_priority(&workspace_id, &name, color.as_deref())
             .map_err(error_message)
     }
 
