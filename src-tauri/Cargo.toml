@@ -21,6 +21,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time"]
 webbrowser = "1"
 chrono = "0.4"
 serde_json = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 [features]
 default = ["custom-protocol"]

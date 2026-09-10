@@ -33,6 +33,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 │       ├── domain.rs       # Task、TaskBlock、WorkSession 等类型
 │       ├── error.rs        # CoreError 和 Result
 │       ├── persistence.rs  # TaskStore、SQL 和状态约束
+│       ├── sync.rs         # 同步快照、合并与活动记录冲突处理
 │       └── lib.rs          # 对外导出与核心集成测试
 ├── src-tauri/
 │   ├── src/lib.rs          # AppState、Tauri commands、数据库初始化
@@ -66,12 +67,15 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 前端当前为 Vite + 原生 JavaScript/DOM，没有 React/Vue 等框架；沿用现有事件绑定和 `escapeHtml` 防注入方式。
 - `ui/dist` 是构建输出，应通过 `npm run ui:build` 生成，不直接改动其中的压缩文件。
 
-### Supabase（已退役）
+### Supabase（同步已实现）
 
-- Python 原型（`web/`）及其 Supabase 同步已于 2026-09-04 删除；桌面端为唯一运行形态。
-- `supabase-schema.sql` 保留为远端 schema 预留件，将来若在 Rust 侧重实现同步时启用；届时必须接入 Supabase Auth 与按用户 RLS，不能沿用旧的公开读写策略。
-
+- Python 原型（`web/`）已于 2026-09-04 删除；当前同步由 Rust 桌面端实现，桌面端为唯一运行形态。
+- `supabase-schema.sql` 是远端同步 schema 契约；所有表均启用 RLS，并使用 Supabase Auth 与 `auth.uid()` 按用户隔离，不能引入公开读写策略。
 - 桌面端内置 Web 设置控制台：默认关闭，仅监听 `127.0.0.1:1421`，设置页点击「前往」后启动并打开浏览器，5 分钟无 HTTP 操作自动关闭；Web 端不提供任务基础操作。
+- Web 设置控制台可编辑 Supabase Project URL、publishable/anon key、Auth 邮箱/密码、schema、5 张表名、自动同步开关与间隔，并保存到系统数据目录的 `supabase.json`；不得填写或保存 service_role/secret key。
+- 自动同步在桌面端启动后运行，默认每 5 分钟拉取并上传一次；Web 设置页左下角显示数据库连接状态，手动「同步」按钮复用同一流程。
+- 同步使用 Supabase Auth 邮箱/密码换取 authenticated JWT，再通过 Data API 访问 5 张表；远端表均有 `user_id`，RLS 使用 `auth.uid()` 隔离数据，anon 无权限。
+- 同步合并逻辑位于 `core/src/sync.rs`，按 `updated_at` / `version` 选择较新记录；本地落库必须通过 `TaskService::apply_sync_snapshot`，不得在适配层直接改 SQLite。
 - 桌面端以 macOS 菜单栏常驻图标运行，不再显示 Dock 图标；左键菜单栏图标可显示/隐藏主窗口，右键菜单可退出。
 - Windows 端使用系统托盘常驻图标；关闭按钮隐藏主窗口，应用仍保留在托盘。
 - 桌面端（`ui/src`）当前为 340×400 置顶便签小窗：横向工作区标签（普通工作区可拖动排序，「已完成」固定最后）+ 纵向可收起分级 + 单行条目（标题+状态/元信息+行内按钮）；已完成任务归档到内置「已完成」工作区；标题栏始终不透明，下面的内容区支持失焦透明度和字号微调，透明度为 0 时须从标题栏唤醒；自绘拖拽；应用内弹窗（webview 无原生 prompt/confirm）。
@@ -94,7 +98,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - `TaskService::correct_work_time` / 桌面 `correct_work_time` 命令用于按目标总分钟数修正历史工作会话；修正直接更新 `work_sessions` 的时间边界，遵守阻塞区间与 `completed_at`，不新增独立修正字段。
 - 更新任务、删除任务、完成任务、结束阻塞等并发敏感操作必须校验 `expected_version`；冲突返回 `VersionConflict`。
 - 迁移 SQL 是跨实现共享契约。新增迁移时要考虑已有数据库升级路径，不要只修改当前建表 SQL 而破坏现有数据库。
-- 迁移通过 `schema_migrations` 表记录执行进度，Rust 与 Python 两端都按文件名顺序执行 `core/migrations/*.sql`；新增迁移直接加文件，不要改历史文件。
+- 迁移通过 `schema_migrations` 表记录执行进度，Rust 按文件名顺序执行 `core/migrations/*.sql`；新增迁移直接加文件，不要改历史文件。
 - 任务状态共四态：`pending` / `in_progress` / `waiting`（等待中，解除阻塞后的默认落点）/ `completed`；阻塞不是状态，由未结束的阻塞记录派生。
 - 已完成任务可通过 `reopen`（`TaskService::reopen` / 桌面 `reopen_task` 命令）回到 `pending`。
 - `workspaces`、`priorities` 是用户可管理实体（增/改名/软删/排序）；只有「已完成」是内置工作区且始终排在最后。每个分级只属于一个工作区，新建工作区自动创建 P0/P1/P2。删除前提：工作区无任务、分级无任务且该工作区至少保留一个分级；任务所选分级必须属于其工作区。工作区排序通过 `TaskService::reorder_workspaces` / 桌面 `reorder_workspaces` 命令批量提交 ID 与 `expected_version`。任务的 `workspace_id`/`priority_id` 可为空（旧数据由迁移回填并按工作区拆分）。
@@ -123,7 +127,7 @@ npm run tauri:build
 
 1. **先判断修改层次**：业务规则改 `core/`；桌面桥接改 `src-tauri/`；桌面 UI 改 `ui/`。不要在适配层复制业务逻辑。
 2. **优先复用核心服务**：新桌面 command 应调用 `TaskService`，而不是直接拼接 SQL。
-3. **数据库变更**：修改 `core/migrations/` 后，同时检查 Rust `include_str!` 和 Python `read_text()` 的路径、字段顺序、索引、约束；必要时增加迁移文件或测试。
+3. **数据库变更**：修改 `core/migrations/` 后，同时检查 Rust `include_str!` 的路径、字段顺序、索引、约束；必要时增加迁移文件或测试。
 4. **并发操作**：任何带版本的更新都必须使用调用方传入的旧版本，成功后由存储层递增 `version`；不要在前端静默覆盖版本冲突。
 5. **错误处理**：核心层使用 `CoreError`，不要吞掉错误；适配层再将其转成 Tauri `String`。新增错误尽量复用现有语义。
 6. **前端输入**：动态插入 HTML 时继续转义用户可控文本；不要把标题、备注、阻塞原因直接拼入未转义的 HTML。

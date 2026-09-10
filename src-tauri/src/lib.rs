@@ -362,6 +362,10 @@ pub fn run() {
                 TaskStore::open(database_path.clone()).map_err(|error| error.to_string())?;
             let service = Arc::new(TaskService::new(store));
             let web = crate::web::WebConsoleState::new(service.clone(), database_path);
+            let auto_sync = web.clone();
+            tauri::async_runtime::spawn(async move {
+                auto_sync.auto_sync_loop().await;
+            });
             let hostname = if cfg!(target_os = "windows") {
                 std::env::var("COMPUTERNAME").unwrap_or_else(|_| "device".into())
             } else {

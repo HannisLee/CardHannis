@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub enum TaskStatus {
     Pending,
     InProgress,
+    Waiting,
     Completed,
 }
 
@@ -14,6 +15,7 @@ impl TaskStatus {
         match self {
             Self::Pending => "pending",
             Self::InProgress => "in_progress",
+            Self::Waiting => "waiting",
             Self::Completed => "completed",
         }
     }
@@ -22,6 +24,7 @@ impl TaskStatus {
         match value {
             "pending" => Ok(Self::Pending),
             "in_progress" => Ok(Self::InProgress),
+            "waiting" => Ok(Self::Waiting),
             "completed" => Ok(Self::Completed),
             other => Err(CoreError::InvalidStatus(other.to_owned())),
         }
@@ -45,6 +48,7 @@ pub struct Task {
     pub updated_at: String,
     pub deleted_at: Option<String>,
     pub version: i64,
+    #[serde(default)]
     pub is_blocked: bool,
     pub workspace_id: Option<String>,
     pub priority_id: Option<String>,

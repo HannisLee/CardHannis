@@ -122,6 +122,20 @@ impl TaskService {
         self.store.list_sessions(task_id)
     }
 
+    pub fn sync_snapshot(&self) -> Result<crate::sync::SyncSnapshot> {
+        Ok(crate::sync::SyncSnapshot {
+            workspaces: self.workspaces(true)?,
+            priorities: self.priorities(true)?,
+            tasks: self.list(true)?,
+            task_blocks: self.store.list_all_blocks()?,
+            work_sessions: self.store.list_all_sessions()?,
+        })
+    }
+
+    pub fn apply_sync_snapshot(&self, snapshot: crate::sync::SyncSnapshot) -> Result<()> {
+        self.store.apply_sync_snapshot(snapshot)
+    }
+
     // ===== 工作区 =====
     pub fn create_workspace(&self, name: &str) -> Result<Workspace> {
         self.store.create_workspace(name, now())

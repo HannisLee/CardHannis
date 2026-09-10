@@ -6,11 +6,13 @@ mod application;
 mod domain;
 mod error;
 mod persistence;
+mod sync;
 
 pub use application::{BlockTaskCommand, CreateTaskCommand, TaskService, UpdateTaskCommand};
 pub use domain::{NewTask, Priority, Task, TaskBlock, TaskStatus, WorkSession, Workspace};
 pub use error::{CoreError, Result};
 pub use persistence::TaskStore;
+pub use sync::{SyncCounts, SyncSnapshot, merge_sync_snapshots};
 
 #[cfg(test)]
 mod tests {
@@ -101,6 +103,78 @@ mod tests {
         let sessions = service.sessions(&task.id).unwrap();
         assert_eq!(sessions.len(), 1);
         assert!(sessions[0].ended_at.is_some());
+    }
+
+    #[test]
+    fn sync_merges_newer_remote_task_and_recomputes_blocked() {
+        let service = service();
+        let task = create(&service);
+        let local = service.sync_snapshot().unwrap();
+
+        let mut remote_task = task.clone();
+        remote_task.title = "远端更新后的标题".to_owned();
+        remote_task.updated_at = "2030-01-01T00:00:00.000Z".to_owned();
+        remote_task.version += 1;
+        let remote_block = TaskBlock {
+            id: "remote-block".to_owned(),
+            task_id: task.id.clone(),
+            started_at: "2026-09-10T12:01:00.000Z".to_owned(),
+            ended_at: None,
+            reason: "远端阻塞".to_owned(),
+            note: None,
+            resolution_reason: None,
+            created_at: "2026-09-10T12:01:00.000Z".to_owned(),
+            updated_at: "2026-09-10T12:01:00.000Z".to_owned(),
+            version: 1,
+            deleted_at: None,
+        };
+        let remote = SyncSnapshot {
+            tasks: vec![remote_task],
+            task_blocks: vec![remote_block],
+            ..SyncSnapshot::default()
+        };
+
+        let merged = merge_sync_snapshots(local, remote);
+        service.apply_sync_snapshot(merged).unwrap();
+        let synced = service.get(&task.id).unwrap().unwrap();
+        assert_eq!(synced.title, "远端更新后的标题");
+        assert_eq!(synced.version, task.version + 1);
+        assert!(synced.is_blocked);
+    }
+
+    #[test]
+    fn sync_resolves_conflicting_active_sessions() {
+        let service = service();
+        let task = create(&service);
+        service.start(&task.id, task.version).unwrap();
+        service.begin_work(&task.id, None).unwrap();
+        let local = service.sync_snapshot().unwrap();
+
+        let remote_session = WorkSession {
+            id: "remote-session".to_owned(),
+            task_id: task.id.clone(),
+            started_at: "2030-01-01T00:30:00.000Z".to_owned(),
+            ended_at: None,
+            note: None,
+            created_at: "2030-01-01T00:30:00.000Z".to_owned(),
+        };
+        let remote = SyncSnapshot {
+            tasks: local.tasks.clone(),
+            work_sessions: vec![remote_session],
+            ..SyncSnapshot::default()
+        };
+
+        let merged = merge_sync_snapshots(local, remote);
+        service.apply_sync_snapshot(merged).unwrap();
+        let sessions = service.store().list_all_sessions().unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(
+            sessions
+                .iter()
+                .filter(|session| session.ended_at.is_none())
+                .count(),
+            1
+        );
     }
 
     #[test]

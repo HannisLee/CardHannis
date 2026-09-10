@@ -1,0 +1,6 @@
+id,title,notes,review_notes,estimated_active_minutes,created_at,started_at,completed_at,status,sort_order,created_device_id,user_id,updated_at,deleted_at,version,workspace_id,priority_id,home_workspace_id,due_date
+11111111-1111-4111-8111-111111111111,整理同步数据库样例,包含工作区、分级、任务、阻塞和工作会话。,,30,2026-09-10T08:00:00.000Z,,,pending,0,sample-device,0768c43d-9c7f-4741-87e2-fc370f560e9f,2026-09-10T08:05:00.000Z,,1,daily,daily-p2,daily,2026-09-11
+22222222-2222-4222-8222-222222222222,实现同步设置页面,,先不做，仅保留样例。,90,2026-09-10T08:10:00.000Z,2026-09-10T08:12:00.000Z,,in_progress,1,sample-device,0768c43d-9c7f-4741-87e2-fc370f560e9f,2026-09-10T08:30:00.000Z,,3,work,work-p0,work,2026-09-12
+33333333-3333-4333-8333-333333333333,等待 Supabase 项目初始化,已解除一次阻塞。,,,2026-09-10T08:15:00.000Z,2026-09-10T08:16:00.000Z,,waiting,2,sample-device,0768c43d-9c7f-4741-87e2-fc370f560e9f,2026-09-10T09:00:00.000Z,,2,daily,daily-p1,daily,
+44444444-4444-4444-8444-444444444444,确认同步表结构,,字段与本地模型一致。,20,2026-09-10T07:30:00.000Z,2026-09-10T07:32:00.000Z,2026-09-10T07:50:00.000Z,completed,0,sample-device,0768c43d-9c7f-4741-87e2-fc370f560e9f,2026-09-10T07:50:00.000Z,,3,done,daily-p1,daily,2026-09-10
+55555555-5555-4555-8555-555555555555,旧版公开读写策略,仅演示软删除。,,,2026-09-10T07:00:00.000Z,,,pending,3,sample-device,0768c43d-9c7f-4741-87e2-fc370f560e9f,2026-09-10T07:10:00.000Z,2026-09-10T07:10:00.000Z,2,work,work-p2,work,

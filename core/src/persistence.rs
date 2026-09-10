@@ -218,7 +218,7 @@ impl TaskStore {
         let completed_at = (status == TaskStatus::Completed).then(|| updated_at.clone());
         let started_at = match status {
             TaskStatus::Pending => None,
-            TaskStatus::InProgress | TaskStatus::Completed => {
+            TaskStatus::InProgress | TaskStatus::Waiting | TaskStatus::Completed => {
                 task.started_at.or(Some(updated_at.clone()))
             }
         };
@@ -394,6 +394,26 @@ impl TaskStore {
             .map_err(Into::into)
     }
 
+    pub fn list_all_blocks(&self) -> Result<Vec<TaskBlock>> {
+        let connection = self.connection.lock().expect("database mutex poisoned");
+        let mut statement = connection.prepare(
+            "SELECT id, task_id, started_at, ended_at, reason, note, resolution_reason, created_at, updated_at, version, deleted_at FROM task_blocks ORDER BY started_at, id",
+        )?;
+        let rows = statement.query_map([], map_block)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn list_all_sessions(&self) -> Result<Vec<WorkSession>> {
+        let connection = self.connection.lock().expect("database mutex poisoned");
+        let mut statement = connection.prepare(
+            "SELECT id, task_id, started_at, ended_at, note, created_at FROM work_sessions ORDER BY started_at, id",
+        )?;
+        let rows = statement.query_map([], map_session)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     pub fn list_sessions(&self, task_id: &str) -> Result<Vec<WorkSession>> {
         let connection = self.connection.lock().expect("database mutex poisoned");
         let mut statement = connection.prepare("SELECT id, task_id, started_at, ended_at, note, created_at FROM work_sessions WHERE task_id = ?1 ORDER BY started_at")?;
@@ -524,6 +544,61 @@ impl TaskStore {
         drop(connection);
         self.get_task(task_id)?
             .ok_or_else(|| CoreError::TaskNotFound(task_id.to_owned()))
+    }
+
+    pub fn apply_sync_snapshot(&self, snapshot: crate::sync::SyncSnapshot) -> Result<()> {
+        crate::sync::ensure_valid_snapshot(&snapshot)?;
+        let mut normalized = crate::sync::SyncSnapshot {
+            workspaces: snapshot.workspaces,
+            priorities: snapshot.priorities,
+            tasks: snapshot.tasks,
+            task_blocks: snapshot.task_blocks,
+            work_sessions: snapshot.work_sessions,
+        };
+        // normalize_snapshot is crate-private through a public wrapper below.
+        crate::sync::normalize_for_storage(&mut normalized);
+        // SQLite checks partial unique indexes while probing an upsert. Apply
+        // already-ended rows first, then the single remaining active row.
+        normalized
+            .task_blocks
+            .sort_by_key(|block| block.ended_at.is_none());
+        normalized
+            .work_sessions
+            .sort_by_key(|session| session.ended_at.is_none());
+        let connection = self.connection.lock().expect("database mutex poisoned");
+        let transaction = connection.unchecked_transaction()?;
+        for workspace in &normalized.workspaces {
+            transaction.execute(
+                "INSERT INTO workspaces (id, name, sort_order, builtin, created_at, updated_at, deleted_at, version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(id) DO UPDATE SET name=excluded.name, sort_order=excluded.sort_order, builtin=excluded.builtin, created_at=excluded.created_at, updated_at=excluded.updated_at, deleted_at=excluded.deleted_at, version=excluded.version",
+                params![workspace.id, workspace.name, workspace.sort_order, workspace.builtin, workspace.created_at, workspace.updated_at, workspace.deleted_at, workspace.version],
+            )?;
+        }
+        for priority in &normalized.priorities {
+            transaction.execute(
+                "INSERT INTO priorities (id, workspace_id, name, color, sort_order, created_at, updated_at, deleted_at, version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id, name=excluded.name, color=excluded.color, sort_order=excluded.sort_order, created_at=excluded.created_at, updated_at=excluded.updated_at, deleted_at=excluded.deleted_at, version=excluded.version",
+                params![priority.id, priority.workspace_id, priority.name, priority.color, priority.sort_order, priority.created_at, priority.updated_at, priority.deleted_at, priority.version],
+            )?;
+        }
+        for task in &normalized.tasks {
+            transaction.execute(
+                "INSERT INTO tasks (id, title, notes, review_notes, estimated_active_minutes, created_at, started_at, completed_at, status, sort_order, created_device_id, updated_at, deleted_at, version, workspace_id, priority_id, home_workspace_id, due_date) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18) ON CONFLICT(id) DO UPDATE SET title=excluded.title, notes=excluded.notes, review_notes=excluded.review_notes, estimated_active_minutes=excluded.estimated_active_minutes, created_at=excluded.created_at, started_at=excluded.started_at, completed_at=excluded.completed_at, status=excluded.status, sort_order=excluded.sort_order, created_device_id=excluded.created_device_id, updated_at=excluded.updated_at, deleted_at=excluded.deleted_at, version=excluded.version, workspace_id=excluded.workspace_id, priority_id=excluded.priority_id, home_workspace_id=excluded.home_workspace_id, due_date=excluded.due_date",
+                params![task.id, task.title, task.notes, task.review_notes, task.estimated_active_minutes, task.created_at, task.started_at, task.completed_at, task.status.as_str(), task.sort_order, task.created_device_id, task.updated_at, task.deleted_at, task.version, task.workspace_id, task.priority_id, task.home_workspace_id, task.due_date],
+            )?;
+        }
+        for block in &normalized.task_blocks {
+            transaction.execute(
+                "INSERT INTO task_blocks (id, task_id, started_at, ended_at, reason, note, resolution_reason, created_at, updated_at, version, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(id) DO UPDATE SET task_id=excluded.task_id, started_at=excluded.started_at, ended_at=excluded.ended_at, reason=excluded.reason, note=excluded.note, resolution_reason=excluded.resolution_reason, created_at=excluded.created_at, updated_at=excluded.updated_at, version=excluded.version, deleted_at=excluded.deleted_at",
+                params![block.id, block.task_id, block.started_at, block.ended_at, block.reason, block.note, block.resolution_reason, block.created_at, block.updated_at, block.version, block.deleted_at],
+            )?;
+        }
+        for session in &normalized.work_sessions {
+            transaction.execute(
+                "INSERT INTO work_sessions (id, task_id, started_at, ended_at, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(id) DO UPDATE SET task_id=excluded.task_id, started_at=excluded.started_at, ended_at=excluded.ended_at, note=excluded.note, created_at=excluded.created_at",
+                params![session.id, session.task_id, session.started_at, session.ended_at, session.note, session.created_at],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     // ===== 工作区 =====

@@ -1,0 +1,4 @@
+id,name,sort_order,builtin,user_id,created_at,updated_at,deleted_at,version
+daily,日常,0,false,0768c43d-9c7f-4741-87e2-fc370f560e9f,2026-09-10T08:00:00.000Z,2026-09-10T08:00:00.000Z,,1
+work,工作,1,false,0768c43d-9c7f-4741-87e2-fc370f560e9f,2026-09-10T08:00:00.000Z,2026-09-10T08:00:00.000Z,,1
+done,已完成,99,true,0768c43d-9c7f-4741-87e2-fc370f560e9f,2026-09-10T08:00:00.000Z,2026-09-10T08:00:00.000Z,,1
