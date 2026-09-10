@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { cursorPosition, getCurrentWindow } from '@tauri-apps/api/window';
-import { LogicalPosition } from '@tauri-apps/api/dpi';
+import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi';
 import './style.css';
 
 const app = document.querySelector('#app');
@@ -15,6 +15,8 @@ let unfocusedOpacity = normalizeOpacity(localStorage.getItem(OPACITY_KEY));
 let fontSizeDelta = normalizeFontSizeDelta(localStorage.getItem(FONT_SIZE_KEY));
 let mouseInside = false;
 let mouseInTitleBar = false;
+let taskDialogOriginalSize = null;
+const TASK_DIALOG_WINDOW_HEIGHT = 440;
 let zeroOpacityExpanded = false;
 function normalizeOpacity(value) {
   const parsed = Number(value);
@@ -126,7 +128,7 @@ function workspacePriorities(workspaceId = state.activeWs) {
 }
 function pillInfo(task) {
   if (task.is_blocked) return { cls: 'blocked', label: '阻塞' };
-  return { in_progress: { cls: 'in_progress', label: '进行' }, completed: { cls: 'completed', label: '完成' } }[task.status] || { cls: 'pending', label: '待办' };
+  return { in_progress: { cls: 'in_progress', label: '进行' }, waiting: { cls: 'waiting', label: '等待' }, completed: { cls: 'completed', label: '完成' } }[task.status] || { cls: 'pending', label: '待办' };
 }
 const prioColor = (p, i) => p.color || PRIO_PALETTE[i % PRIO_PALETTE.length];
 
@@ -217,7 +219,7 @@ function render() {
       <h2>新任务</h2>
       <label>标题<input name="title" required maxlength="200" placeholder="要做点什么？" autofocus /></label>
       <div class="dlg-grid">
-        <label>预计小时<input name="estimated" type="number" min="0" step="0.5" placeholder="2" /></label>
+        <label>预计小时<input name="estimated" type="number" min="0" step="1" value="2" /></label>
         <label>完成日期<input name="dueDate" type="date" /></label>
         <label>当前进行<output name="currentActive">0h</output></label>
         <label>修正为（小时）<input name="correctedActive" type="number" min="0" step="0.5" placeholder="3" /></label>
@@ -298,7 +300,12 @@ function render() {
     if (unfocusedOpacity === 0) scheduleMousePositionUpdate();
   });
   document.querySelector('#btn-new')?.addEventListener('click', () => openTaskDialog(null));
-  document.querySelector('#task-dialog')?.addEventListener('close', () => { state.editingTask = null; state.editingTaskSessions = []; state.editingTaskCurrentMinutes = 0; });
+  document.querySelector('#task-dialog')?.addEventListener('close', () => {
+  void restoreWindowAfterTaskDialog();
+  state.editingTask = null;
+  state.editingTaskSessions = [];
+  state.editingTaskCurrentMinutes = 0;
+});
   document.querySelector('#btn-settings')?.addEventListener('click', () => document.querySelector('#settings-dialog').showModal());
   document.querySelector('#opacity-range')?.addEventListener('input', (e) => {
     const v = normalizeOpacity(e.target.value);
@@ -517,6 +524,30 @@ async function handleGroupTool(button) {
   } catch (error) { notify(errorMessage(error, '操作失败')); }
 }
 
+async function expandWindowForTaskDialog() {
+  const w = theWindow();
+  if (!w) return;
+  try {
+    const [size, scale] = await Promise.all([w.outerSize(), w.scaleFactor()]);
+    const logicalSize = size.toLogical(scale);
+    if (logicalSize.height >= TASK_DIALOG_WINDOW_HEIGHT) return;
+    taskDialogOriginalSize = logicalSize;
+    await w.setSize(new LogicalSize(logicalSize.width, TASK_DIALOG_WINDOW_HEIGHT));
+  } catch (error) {
+    taskDialogOriginalSize = null;
+  }
+}
+
+async function restoreWindowAfterTaskDialog() {
+  const w = theWindow();
+  const originalSize = taskDialogOriginalSize;
+  taskDialogOriginalSize = null;
+  if (!w || !originalSize) return;
+  try {
+    await w.setSize(new LogicalSize(originalSize.width, originalSize.height));
+  } catch {}
+}
+
 async function openTaskDialog(prioId, task = null) {
   state.editingTask = task;
   state.editingTaskSessions = [];
@@ -546,6 +577,7 @@ async function openTaskDialog(prioId, task = null) {
     form.querySelector('[name="currentActive"]').textContent = fmtDuration(0);
     form.querySelector('[name="correctedActive"]').value = '';
   }
+  await expandWindowForTaskDialog();
   dialog.showModal();
   form.querySelector('[name="title"]').focus();
 }
