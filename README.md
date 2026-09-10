@@ -13,7 +13,7 @@ CardHannis Core 是一个跨平台 Rust 核心库，负责任务、重复阻塞�
 - SQLite 外键、软删除、版本号乐观并发控制。
 - `TaskService` 作为 GUI、CLI 共用的业务门面。
 - 分级按工作区独立管理；新建工作区自动带有 P0/P1/P2，任务不能引用其他工作区的分级；只有「已完成」是内置工作区且始终排在最后，普通工作区支持拖动排序。
-- 桌面端内置一个默认关闭的 Web 设置控制台，可在设置中点击「前往」打开，5 分钟无操作后自动关闭；其中可配置 Supabase Project URL、publishable/anon key、Auth 邮箱/密码、schema、5 张表名和自动同步间隔，配置保存到系统数据目录的 `supabase.json`。
+- 桌面端内置一个默认关闭的 Web 设置控制台，可在设置中点击「前往」打开，5 分钟无操作后自动关闭；其中可配置 Supabase Project URL、publishable/anon key、Auth 邮箱/密码、schema、5 张表名和自动同步间隔，配置保存到项目根目录的 `supabase.local.json`；该文件已被 Git 忽略，可复制到另一台电脑的项目根目录直接复用。
 - 桌面端会按配置自动拉取并上传 Supabase 数据，默认每 5 分钟一次；Web 设置页左下角显示数据库连接状态。同步使用 Supabase Auth 登录用户和按 `user_id` 隔离的 RLS。
 - macOS 桌面端以菜单栏常驻图标运行，不占用 Dock；关闭按钮会隐藏窗口，应用仍保留在菜单栏。
 - Windows 端同样支持系统托盘常驻；主窗口隐藏后应用仍保留在托盘。

@@ -72,7 +72,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - Python 原型（`web/`）已于 2026-09-04 删除；当前同步由 Rust 桌面端实现，桌面端为唯一运行形态。
 - `supabase-schema.sql` 是远端同步 schema 契约；所有表均启用 RLS，并使用 Supabase Auth 与 `auth.uid()` 按用户隔离，不能引入公开读写策略。
 - 桌面端内置 Web 设置控制台：默认关闭，仅监听 `127.0.0.1:1421`，设置页点击「前往」后启动并打开浏览器，5 分钟无 HTTP 操作自动关闭；Web 端不提供任务基础操作。
-- Web 设置控制台可编辑 Supabase Project URL、publishable/anon key、Auth 邮箱/密码、schema、5 张表名、自动同步开关与间隔，并保存到系统数据目录的 `supabase.json`；不得填写或保存 service_role/secret key。
+- Web 设置控制台可编辑 Supabase Project URL、publishable/anon key、Auth 邮箱/密码、schema、5 张表名、自动同步开关与间隔，并保存到项目根目录的 `supabase.local.json`；该文件已被 Git 忽略，可跨电脑复制。旧版系统数据目录 `supabase.json` 仅作为迁移回退。不得填写或保存 service_role/secret key。
 - 自动同步在桌面端启动后运行，默认每 5 分钟拉取并上传一次；Web 设置页左下角显示数据库连接状态，手动「同步」按钮复用同一流程。
 - 同步使用 Supabase Auth 邮箱/密码换取 authenticated JWT，再通过 Data API 访问 5 张表；远端表均有 `user_id`，RLS 使用 `auth.uid()` 隔离数据，anon 无权限。
 - 同步合并逻辑位于 `core/src/sync.rs`，按 `updated_at` / `version` 选择较新记录；本地落库必须通过 `TaskService::apply_sync_snapshot`，不得在适配层直接改 SQLite。

@@ -124,8 +124,41 @@ fn default_work_sessions_table() -> String {
     DEFAULT_WORK_SESSIONS_TABLE.to_owned()
 }
 
-fn load_supabase_settings(path: &Path) -> SupabaseSettings {
-    fs::read_to_string(path)
+fn project_supabase_settings_path(database_path: &Path) -> PathBuf {
+    if let Some(path) = std::env::var_os("CARDHANNIS_SUPABASE_SETTINGS") {
+        return PathBuf::from(path);
+    }
+
+    let mut candidates = Vec::new();
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.extend(current_dir.ancestors().map(Path::to_path_buf));
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        candidates.extend(executable.ancestors().map(Path::to_path_buf));
+    }
+    if let Some(project_root) = Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
+        candidates.push(project_root.to_path_buf());
+    }
+
+    for directory in candidates {
+        if directory.join("Cargo.toml").is_file() && directory.join("package.json").is_file() {
+            return directory.join("supabase.local.json");
+        }
+    }
+
+    // Packaged installs may not have a project checkout nearby. Keep the old
+    // app-data location as a fallback so existing installations keep working.
+    database_path.with_file_name("supabase.json")
+}
+
+fn load_supabase_settings(path: &Path, fallback_path: &Path) -> SupabaseSettings {
+    if path.exists() {
+        return fs::read_to_string(path)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+            .unwrap_or_default();
+    }
+    fs::read_to_string(fallback_path)
         .ok()
         .and_then(|content| serde_json::from_str(&content).ok())
         .unwrap_or_default()
@@ -208,6 +241,19 @@ fn save_supabase_settings(path: &Path, settings: &SupabaseSettings) -> Result<()
     fs::rename(&temporary, path).map_err(|error| format!("保存 Supabase 设置失败: {error}"))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supabase_settings_use_project_root_when_available() {
+        let path = project_supabase_settings_path(Path::new("/tmp/cardhannis.sqlite3"));
+        assert_eq!(path.file_name().unwrap(), "supabase.local.json");
+        assert!(path.parent().unwrap().join("Cargo.toml").is_file());
+        assert!(path.parent().unwrap().join("package.json").is_file());
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct SyncRuntimeStatus {
     connected: bool,
@@ -244,8 +290,15 @@ pub struct WebConsoleState {
 
 impl WebConsoleState {
     pub fn new(service: Arc<TaskService>, database_path: PathBuf) -> Arc<Self> {
-        let settings_path = database_path.with_file_name("supabase.json");
-        let settings = load_supabase_settings(&settings_path);
+        let settings_path = project_supabase_settings_path(&database_path);
+        let legacy_settings_path = database_path.with_file_name("supabase.json");
+        let settings = load_supabase_settings(&settings_path, &legacy_settings_path);
+        if settings_path != legacy_settings_path
+            && !settings_path.exists()
+            && !settings.url.is_empty()
+        {
+            let _ = save_supabase_settings(&settings_path, &settings);
+        }
         let sync_status = SyncRuntimeStatus {
             connected: false,
             syncing: false,
@@ -930,7 +983,8 @@ button:disabled { opacity: .55; cursor: not-allowed; }
         <button class="primary" type="button" id="sync-now">同步</button>
       </div>
     </form>
-    <p class="note">只填写 publishable/anon key，不要填写 service_role/secret key。当前版本不会自动同步；「同步」按钮只返回预留状态。</p>
+    <p class="note">只填写 publishable/anon key，不要填写 service_role/secret key。自动同步会按下方间隔拉取并上传；「同步」按钮可立即执行一次。</p>
+    <p class="note">配置保存在项目根目录 <code>supabase.local.json</code>，该文件已被 Git 忽略，可复制到另一台电脑的项目根目录直接使用。</p>
     <p class="note">配置文件：<span id="settings-path">—</span></p>
     <p class="status" id="supabase-status" data-state="idle">正在读取 Supabase 设置…</p>
   </section>
