@@ -567,6 +567,15 @@ impl TaskStore {
             .sort_by_key(|session| session.ended_at.is_none());
         let connection = self.connection.lock().expect("database mutex poisoned");
         let transaction = connection.unchecked_transaction()?;
+        // `snapshot` is the complete union selected by the sync merge, not a
+        // partial patch. Replacing rows removes migration-only seed records on
+        // a newly initialized device, while preserving all real local and
+        // remote rows because both sides were included in that union.
+        transaction.execute("DELETE FROM work_sessions", [])?;
+        transaction.execute("DELETE FROM task_blocks", [])?;
+        transaction.execute("DELETE FROM tasks", [])?;
+        transaction.execute("DELETE FROM priorities", [])?;
+        transaction.execute("DELETE FROM workspaces", [])?;
         for workspace in &normalized.workspaces {
             transaction.execute(
                 "INSERT INTO workspaces (id, name, sort_order, builtin, created_at, updated_at, deleted_at, version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(id) DO UPDATE SET name=excluded.name, sort_order=excluded.sort_order, builtin=excluded.builtin, created_at=excluded.created_at, updated_at=excluded.updated_at, deleted_at=excluded.deleted_at, version=excluded.version",

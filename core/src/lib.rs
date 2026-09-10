@@ -143,6 +143,50 @@ mod tests {
     }
 
     #[test]
+    fn first_sync_discards_migration_seeds_when_remote_has_data() {
+        let service = service();
+        let local = service.sync_snapshot().unwrap();
+        assert!(local.is_bootstrap_seed());
+
+        let remote_workspace = Workspace {
+            id: "remote-workspace".to_owned(),
+            name: "远端工作区".to_owned(),
+            sort_order: 0,
+            builtin: false,
+            created_at: "2026-09-10T00:00:00.000Z".to_owned(),
+            updated_at: "2026-09-10T00:00:00.000Z".to_owned(),
+            deleted_at: None,
+            version: 1,
+        };
+        let remote_priority = Priority {
+            id: "remote-priority".to_owned(),
+            workspace_id: remote_workspace.id.clone(),
+            name: "远端分级".to_owned(),
+            color: None,
+            sort_order: 0,
+            created_at: "2026-09-10T00:00:00.000Z".to_owned(),
+            updated_at: "2026-09-10T00:00:00.000Z".to_owned(),
+            deleted_at: None,
+            version: 1,
+        };
+        let remote = SyncSnapshot {
+            workspaces: vec![remote_workspace],
+            priorities: vec![remote_priority],
+            ..SyncSnapshot::default()
+        };
+
+        let merged = merge_sync_snapshots(local, remote);
+        assert_eq!(merged.workspaces.len(), 1);
+        assert_eq!(merged.priorities.len(), 1);
+        service.apply_sync_snapshot(merged).unwrap();
+
+        let stored = service.sync_snapshot().unwrap();
+        assert_eq!(stored.workspaces.len(), 1);
+        assert_eq!(stored.priorities.len(), 1);
+        assert!(stored.tasks.is_empty());
+    }
+
+    #[test]
     fn sync_resolves_conflicting_active_sessions() {
         let service = service();
         let task = create(&service);

@@ -4,15 +4,30 @@ import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi';
 import './style.css';
 
 const app = document.querySelector('#app');
-const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, finishedSessionMinutesByTask: {}, sessionMinutesByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null, unblockingTaskId: null, editingTask: null, editingTaskSessions: [], editingTaskCurrentMinutes: 0 };
+const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, finishedSessionMinutesByTask: {}, sessionMinutesByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null, unblockingTaskId: null, editingTask: null, editingTaskSessions: [], editingTaskCurrentMinutes: 0, syncStatus: null };
 const COLLAPSE_KEY = 'cardha…e.v2';
 const OPACITY_KEY = 'cardhannis.sticky.opacity.v1';
+const ALWAYS_SHOW_CONTENT_KEY = 'cardhannis.content.always-visible.v1';
 // v2 将用户确认的旧版 +2px 视觉大小固化为新的零点。
 const FONT_SIZE_KEY = 'cardhannis.ui.font-delta.v2';
 const FONT_SIZE_MIN = -2;
 const FONT_SIZE_MAX = 1.5;
+const FONT_FAMILY_KEY = 'cardhannis.ui.font-family.v1';
+const FONT_FAMILY_PRESETS = Object.freeze({
+  system: { label: '系统默认', css: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei UI", sans-serif' },
+  yaheiUi: { label: '微软雅黑 UI', css: '"Microsoft YaHei UI", "Microsoft YaHei", sans-serif' },
+  yahei: { label: '微软雅黑', css: '"Microsoft YaHei", sans-serif' },
+  dengxian: { label: '等线', css: 'DengXian, "Microsoft YaHei UI", sans-serif' },
+  segoe: { label: 'Segoe UI', css: '"Segoe UI", sans-serif' },
+  simsun: { label: '宋体', css: 'SimSun, 宋体, serif' },
+  simhei: { label: '黑体', css: 'SimHei, 黑体, sans-serif' },
+});
+let fontFamilyOptions = { ...FONT_FAMILY_PRESETS };
 let unfocusedOpacity = normalizeOpacity(localStorage.getItem(OPACITY_KEY));
 let fontSizeDelta = normalizeFontSizeDelta(localStorage.getItem(FONT_SIZE_KEY));
+let fontFamilyChoice = localStorage.getItem(FONT_FAMILY_KEY) || 'system';
+if (!fontFamilyOptions[fontFamilyChoice]) fontFamilyChoice = 'system';
+let alwaysShowContent = localStorage.getItem(ALWAYS_SHOW_CONTENT_KEY) === '1';
 let mouseInside = false;
 let mouseInTitleBar = false;
 let taskDialogOriginalSize = null;
@@ -24,7 +39,7 @@ function normalizeOpacity(value) {
   return Math.min(100, Math.max(0, Math.round(parsed / 5) * 5));
 }
 function applyContentOpacity() {
-  const expanded = unfocusedOpacity === 0 ? zeroOpacityExpanded : mouseInside;
+  const expanded = alwaysShowContent || (unfocusedOpacity === 0 ? zeroOpacityExpanded : mouseInside);
   const opacity = expanded ? 100 : unfocusedOpacity;
   document.documentElement.style.setProperty('--content-opacity', (opacity / 100).toFixed(2));
   document.documentElement.classList.toggle('content-hidden', opacity === 0);
@@ -47,6 +62,7 @@ const ICONS = {
   done: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m9 10l3.258 2.444a1 1 0 0 0 1.353-.142L20 5"/><path d="M21 12a9 9 0 1 1-6.67-8.693"/></g></svg>',
   block: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m15 2l6 6m0-6l-6 6"/><circle cx="6" cy="19" r="3"/><path d="M12 5H8.5a3.5 3.5 0 1 0 0 7h7a3.5 3.5 0 1 1 0 7H12"/></g></svg>',
   add: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5.25v13.5M18.75 12H5.25"/></svg>',
+  chevronDown: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="m5 8 7 8 7-8z"/></svg>',
   pin: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="currentColor" transform="scale(0.6667)"><path d="M30 30H6V6h16V4H6a2 2 0 0 0-2 2v24a2 2 0 0 0 2 2h24a2 2 0 0 0 2-2V14h-2Z"/><path d="m33.57 9.33l-7-7a1 1 0 0 0-1.41 1.41l1.38 1.38l-4 4c-2-.87-4.35.14-5.92 1.68l-.72.71l3.54 3.54l-3.67 3.67l1.41 1.41l3.67-3.67L24.37 20l.71-.72c1.54-1.57 2.55-3.91 1.68-5.92l4-4l1.38 1.38a1 1 0 1 0 1.41-1.41Z"/></g></svg>',
   settings: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2"/><circle cx="12" cy="12" r="3"/></g></svg>',
   clock: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></g></svg>',
@@ -73,7 +89,24 @@ function formatFontSizeDelta(value) {
 function applyFontSize() {
   document.documentElement.style.setProperty('--ui-font-delta', `${fontSizeDelta}px`);
 }
+function applyFontFamily() {
+  document.documentElement.style.fontFamily = (fontFamilyOptions[fontFamilyChoice] || FONT_FAMILY_PRESETS.system).css;
+}
+applyFontFamily();
 applyFontSize();
+
+function fontFamilyOptionsMarkup() {
+  return Object.entries(fontFamilyOptions)
+    .map(([value, option]) => `<option value="${escapeHtml(value)}"${value === fontFamilyChoice ? ' selected' : ''}>${escapeHtml(option.label)}</option>`)
+    .join('');
+}
+
+function refreshFontFamilySelect() {
+  const select = document.querySelector('#font-family-select');
+  if (!select) return;
+  select.innerHTML = fontFamilyOptionsMarkup();
+  select.value = fontFamilyChoice;
+}
 function formatEstimatedHours(minutes) {
   if (minutes === null || minutes === undefined) return '未估时';
   const hours = Number(minutes) / 60;
@@ -132,6 +165,26 @@ function pillInfo(task) {
 }
 const prioColor = (p, i) => p.color || PRIO_PALETTE[i % PRIO_PALETTE.length];
 
+function syncStatusView() {
+  if (!isTauri()) return { label: '浏览器预览', cls: 'preview' };
+  const status = state.syncStatus;
+  if (status?.last_error) return { label: '同步失败', cls: 'error' };
+  if (status?.pending_changes) return { label: '等待同步…', cls: 'idle' };
+  if (status?.connected && status?.last_synced_at) return { label: '已同步', cls: 'connected' };
+  if (status?.auto_sync) return { label: '等待同步…', cls: 'idle' };
+  return { label: '本地数据库', cls: 'local' };
+}
+
+function updateSyncStatusUi() {
+  const view = syncStatusView();
+  const dot = document.querySelector('#sync-status-dot');
+  const label = document.querySelector('#sync-status-label');
+  if (!dot || !label) return;
+  dot.className = `dot ${view.cls}`;
+  label.textContent = view.label;
+  label.title = state.syncStatus?.last_error || '';
+}
+
 function row(task) {
   const done = task.status === 'completed';
   const block = state.blocksByTask[task.id];
@@ -176,11 +229,12 @@ function render() {
   const localPrios = workspacePriorities(ws?.id);
   const groups = localPrios.map((p, i) => ({ p, color: prioColor(p, i), tasks: wsTasks.filter((t) => t.priority_id === p.id) }));
   const unsorted = wsTasks.filter((t) => !localPrios.some((p) => p.id === t.priority_id));
+  const syncView = syncStatusView();
   app.innerHTML = `<div class="win"><div class="win-sheet">
     <header class="win-bar">
       <span class="win-brand">${ICONS.logo}CardHannis</span>
       <div class="win-tools">
-        <button id="btn-new" title="新建任务" type="button">${ICONS.add}</button>
+        <button id="btn-content-mode" class="${alwaysShowContent ? 'on' : ''}" aria-pressed="${alwaysShowContent}" title="${alwaysShowContent ? '固定显示内容（点击恢复鼠标移开隐藏）' : '固定显示内容'}" type="button">${ICONS.chevronDown}</button>
         <button id="btn-settings" title="设置" type="button">${ICONS.settings}</button>
         <button id="btn-pin" class="${pinned ? 'on' : ''}" title="切换窗口置顶" type="button">${ICONS.pin}</button>
         <button id="btn-min" title="最小化" type="button">−</button>
@@ -210,7 +264,7 @@ function render() {
         </section>`;
       }).join('')}
     </div>
-    <footer class="win-foot"><span class="dot"></span><span>${isTauri() ? '本地数据库' : '浏览器预览'}</span><span class="foot-right">${new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' })}</span></footer>
+    <footer class="win-foot"><span id="sync-status-dot" class="dot ${syncView.cls}"></span><span id="sync-status-label">${syncView.label}</span><span class="foot-right">${new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' })}</span></footer>
   </div>
   </div>
   </div>
@@ -221,8 +275,8 @@ function render() {
       <div class="dlg-grid">
         <label>预计小时<input name="estimated" type="number" min="0" step="1" value="2" /></label>
         <label>完成日期<input name="dueDate" type="date" /></label>
-        <label>当前进行<output name="currentActive">0h</output></label>
-        <label>修正为（小时）<input name="correctedActive" type="number" min="0" step="0.5" placeholder="3" /></label>
+        <label class="edit-only" hidden>当前进行<output name="currentActive">0h</output></label>
+        <label class="edit-only" hidden>修正为（小时）<input name="correctedActive" type="number" min="0" step="0.5" placeholder="3" /></label>
       </div>
       <label>备注<textarea name="notes" rows="2" placeholder="可选"></textarea></label>
       <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" id="task-ok" type="button">贴上</button></div>
@@ -266,6 +320,9 @@ function render() {
       <label class="set-slider"><span class="set-slider-head"><span>界面字体大小</span><output id="font-size-val">${formatFontSizeDelta(fontSizeDelta)}</output></span>
         <input type="range" id="font-size-range" min="${FONT_SIZE_MIN}" max="${FONT_SIZE_MAX}" step="0.5" value="${fontSizeDelta}" />
       </label>
+      <label>界面字体
+        <select id="font-family-select">${fontFamilyOptionsMarkup()}</select>
+      </label>
       <div class="set-web">
         <span>Web 设置</span>
         <button id="btn-web" type="button">前往</button>
@@ -299,7 +356,12 @@ function render() {
     mouseInTitleBar = false;
     if (unfocusedOpacity === 0) scheduleMousePositionUpdate();
   });
-  document.querySelector('#btn-new')?.addEventListener('click', () => openTaskDialog(null));
+  document.querySelector('#btn-content-mode')?.addEventListener('click', () => {
+    alwaysShowContent = !alwaysShowContent;
+    localStorage.setItem(ALWAYS_SHOW_CONTENT_KEY, alwaysShowContent ? '1' : '0');
+    applyContentOpacity();
+    render();
+  });
   document.querySelector('#task-dialog')?.addEventListener('close', () => {
   void restoreWindowAfterTaskDialog();
   state.editingTask = null;
@@ -320,6 +382,12 @@ function render() {
     localStorage.setItem(FONT_SIZE_KEY, String(fontSizeDelta));
     document.querySelector('#font-size-val').textContent = formatFontSizeDelta(fontSizeDelta);
     applyFontSize();
+  });
+  document.querySelector('#font-family-select')?.addEventListener('change', (e) => {
+    if (!fontFamilyOptions[e.target.value]) return;
+    fontFamilyChoice = e.target.value;
+    localStorage.setItem(FONT_FAMILY_KEY, fontFamilyChoice);
+    applyFontFamily();
   });
   document.querySelector('#btn-web')?.addEventListener('click', async () => {
     try {
@@ -558,6 +626,7 @@ async function openTaskDialog(prioId, task = null) {
   const dialog = document.querySelector('#task-dialog');
   const form = document.querySelector('#task-form');
   form.reset();
+  form.querySelectorAll('.edit-only').forEach((element) => { element.hidden = !task; });
   dialog.querySelector('h2').textContent = task ? '修改任务' : '新任务';
   dialog.querySelector('#task-ok').textContent = task ? '保存' : '贴上';
   if (task) {
@@ -913,6 +982,32 @@ async function loadTasks() {
   render();
 }
 
+async function loadSyncStatus() {
+  if (!isTauri()) return;
+  try {
+    state.syncStatus = await call('sync_status');
+    updateSyncStatusUi();
+  } catch {}
+}
+
+async function loadSystemFonts() {
+  if (!isTauri()) return;
+  try {
+    const fonts = await call('list_system_fonts');
+    fonts.forEach((name) => {
+      const trimmed = String(name).trim();
+      if (!trimmed) return;
+      const key = `installed:${trimmed}`;
+      if (!fontFamilyOptions[key]) {
+        const cssName = trimmed.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        fontFamilyOptions[key] = { label: trimmed, css: `"${cssName}", sans-serif` };
+      }
+    });
+    applyFontFamily();
+    refreshFontFamilySelect();
+  } catch {}
+}
+
 
 // 每分钟只刷新计时文本，不整页重绘，避免影响打开中的弹窗。
 setInterval(() => {
@@ -1209,11 +1304,13 @@ function notify(message) {
 }
 
 render();
+void loadSystemFonts();
 (async () => {
   const w = theWindow();
   if (w) {
     try { pinned = await w.isAlwaysOnTop(); } catch {}
   }
-  await loadMeta();
-  await loadTasks();
+  await Promise.all([loadMeta(), loadTasks(), loadSyncStatus()]);
 })();
+
+setInterval(loadSyncStatus, 5000);

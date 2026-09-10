@@ -15,6 +15,7 @@
         "title": "CardHannis",
         "width": 340,
         "height": 400,
+        "visible": true,
         "minWidth": 320,
         "minHeight": 280,
         "resizable": true,

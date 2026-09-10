@@ -73,9 +73,9 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - `supabase-schema.sql` 是远端同步 schema 契约；所有表均启用 RLS，并使用 Supabase Auth 与 `auth.uid()` 按用户隔离，不能引入公开读写策略。
 - 桌面端内置 Web 设置控制台：默认关闭，仅监听 `127.0.0.1:1421`，设置页点击「前往」后启动并打开浏览器，5 分钟无 HTTP 操作自动关闭；Web 端不提供任务基础操作。
 - Web 设置控制台可编辑 Supabase Project URL、publishable/anon key、Auth 邮箱/密码、schema、5 张表名、自动同步开关与间隔，并保存到项目根目录的 `supabase.local.json`；该文件已被 Git 忽略，可跨电脑复制。旧版系统数据目录 `supabase.json` 仅作为迁移回退。不得填写或保存 service_role/secret key。
-- 自动同步在桌面端启动后运行，默认每 5 分钟拉取并上传一次；Web 设置页左下角显示数据库连接状态，手动「同步」按钮复用同一流程。
+- 自动同步在桌面端启动后运行，默认每 10 分钟执行一次双向合并；Web 设置页左下角显示数据库连接状态，「立即同步」按钮复用同一流程。首次同步若本地仅有迁移生成的固定种子记录且远端已有数据，必须以远端快照为准，不能上传这些种子。
 - 同步使用 Supabase Auth 邮箱/密码换取 authenticated JWT，再通过 Data API 访问 5 张表；远端表均有 `user_id`，RLS 使用 `auth.uid()` 隔离数据，anon 无权限。
-- 同步合并逻辑位于 `core/src/sync.rs`，按 `updated_at` / `version` 选择较新记录；本地落库必须通过 `TaskService::apply_sync_snapshot`，不得在适配层直接改 SQLite。
+- 同步合并逻辑位于 `core/src/sync.rs`，按 `updated_at` / `version` 选择较新记录；合并后的完整快照必须原子替换本地同步表，避免首次同步遗留迁移种子；本地落库必须通过 `TaskService::apply_sync_snapshot`，不得在适配层直接改 SQLite。
 - 桌面端以 macOS 菜单栏常驻图标运行，不再显示 Dock 图标；左键菜单栏图标可显示/隐藏主窗口，右键菜单可退出。
 - Windows 端使用系统托盘常驻图标；关闭按钮隐藏主窗口，应用仍保留在托盘。
 - 桌面端（`ui/src`）当前为 340×400 置顶便签小窗：横向工作区标签（普通工作区可拖动排序，「已完成」固定最后）+ 纵向可收起分级 + 单行条目（标题+状态/元信息+行内按钮）；已完成任务归档到内置「已完成」工作区；标题栏始终不透明，下面的内容区支持失焦透明度和字号微调，透明度为 0 时须从标题栏唤醒；自绘拖拽；应用内弹窗（webview 无原生 prompt/confirm）。
@@ -104,6 +104,8 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - `workspaces`、`priorities` 是用户可管理实体（增/改名/软删/排序）；只有「已完成」是内置工作区且始终排在最后。每个分级只属于一个工作区，新建工作区自动创建 P0/P1/P2。删除前提：工作区无任务、分级无任务且该工作区至少保留一个分级；任务所选分级必须属于其工作区。工作区排序通过 `TaskService::reorder_workspaces` / 桌面 `reorder_workspaces` 命令批量提交 ID 与 `expected_version`。任务的 `workspace_id`/`priority_id` 可为空（旧数据由迁移回填并按工作区拆分）。
 
 ## 常用命令
+
+Windows 开发环境约定：Cargo/Rust 工具链安装在 `D:\Code\Cargo`（`cargo` 位于 `D:\Code\Cargo\bin`）。若当前终端找不到 `cargo`，请先将该目录加入 `PATH`，并按需设置 `CARGO_HOME=D:\Code\Cargo`、`RUSTUP_HOME=D:\Code\Cargo\rustup`。
 
 在项目根目录执行：
 

@@ -23,6 +23,9 @@ chrono = "0.4"
 serde_json = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

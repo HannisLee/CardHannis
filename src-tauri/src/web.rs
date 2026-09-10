@@ -29,7 +29,7 @@ const DEFAULT_PRIORITIES_TABLE: &str = "priorities";
 const DEFAULT_TASKS_TABLE: &str = "tasks";
 const DEFAULT_TASK_BLOCKS_TABLE: &str = "task_blocks";
 const DEFAULT_WORK_SESSIONS_TABLE: &str = "work_sessions";
-const DEFAULT_SYNC_INTERVAL_MINUTES: u64 = 5;
+const DEFAULT_SYNC_INTERVAL_MINUTES: u64 = 10;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct SupabaseTableSettings {
@@ -255,9 +255,10 @@ mod tests {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct SyncRuntimeStatus {
+pub struct SyncRuntimeStatus {
     connected: bool,
     syncing: bool,
+    pending_changes: bool,
     auto_sync: bool,
     interval_minutes: u64,
     last_synced_at: Option<String>,
@@ -302,6 +303,7 @@ impl WebConsoleState {
         let sync_status = SyncRuntimeStatus {
             connected: false,
             syncing: false,
+            pending_changes: false,
             auto_sync: settings.auto_sync,
             interval_minutes: settings.sync_interval_minutes,
             last_synced_at: None,
@@ -337,8 +339,35 @@ impl WebConsoleState {
             .as_millis() as u64
     }
 
-    fn sync_status(&self) -> SyncRuntimeStatus {
-        self.sync_status.lock().unwrap().clone()
+    pub fn sync_status(&self) -> SyncRuntimeStatus {
+        let mut status = self.sync_status.lock().unwrap().clone();
+        if let Some(last_synced_at) = status.last_synced_at.clone() {
+            if let Ok(snapshot) = self.service.sync_snapshot() {
+                status.pending_changes =
+                    snapshot
+                        .workspaces
+                        .iter()
+                        .map(|item| item.updated_at.as_str())
+                        .chain(
+                            snapshot
+                                .priorities
+                                .iter()
+                                .map(|item| item.updated_at.as_str()),
+                        )
+                        .chain(snapshot.tasks.iter().map(|item| item.updated_at.as_str()))
+                        .chain(
+                            snapshot
+                                .task_blocks
+                                .iter()
+                                .map(|item| item.updated_at.as_str()),
+                        )
+                        .chain(snapshot.work_sessions.iter().map(|item| {
+                            item.ended_at.as_deref().unwrap_or(item.created_at.as_str())
+                        }))
+                        .any(|updated_at| updated_at > last_synced_at.as_str());
+            }
+        }
+        status
     }
 
     fn update_sync_status(
@@ -970,7 +999,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
         <label class="full">Auth Password<input id="auth-password" type="password" required autocomplete="off" spellcheck="false" /></label>
         <label class="checkbox"><input id="show-auth-password" type="checkbox" />显示 Auth Password</label>
         <label>自动同步间隔（分钟）<input id="sync-interval" type="number" min="1" max="1440" step="1" required /></label>
-        <label class="checkbox"><input id="auto-sync" type="checkbox" />每 5 分钟自动拉取并上传</label>
+        <label class="checkbox"><input id="auto-sync" type="checkbox" />按设定周期自动双向同步</label>
         <label>工作区表<input id="table-workspaces" required autocomplete="off" spellcheck="false" /></label>
         <label>分级表<input id="table-priorities" required autocomplete="off" spellcheck="false" /></label>
         <label>任务表<input id="table-tasks" required autocomplete="off" spellcheck="false" /></label>
@@ -980,10 +1009,10 @@ button:disabled { opacity: .55; cursor: not-allowed; }
       <div class="form-actions">
         <button class="ghost" type="button" id="reset-tables">恢复默认表名</button>
         <button class="primary" type="submit" id="save-supabase">保存设置</button>
-        <button class="primary" type="button" id="sync-now">同步</button>
+        <button class="primary" type="button" id="sync-now">立即同步</button>
       </div>
     </form>
-    <p class="note">只填写 publishable/anon key，不要填写 service_role/secret key。自动同步会按下方间隔拉取并上传；「同步」按钮可立即执行一次。</p>
+    <p class="note">只填写 publishable/anon key，不要填写 service_role/secret key。自动同步会按下方间隔拉取并上传；「立即同步」按钮可立即执行一次。</p>
     <p class="note">配置保存在项目根目录 <code>supabase.local.json</code>，该文件已被 Git 忽略，可复制到另一台电脑的项目根目录直接使用。</p>
     <p class="note">配置文件：<span id="settings-path">—</span></p>
     <p class="status" id="supabase-status" data-state="idle">正在读取 Supabase 设置…</p>
@@ -1090,7 +1119,7 @@ function renderSupabaseSettings(data) {
   $('auth-email').value = data.authEmail || '';
   $('auth-password').value = data.authPassword || '';
   $('auto-sync').checked = data.autoSync !== false;
-  $('sync-interval').value = data.syncIntervalMinutes || 5;
+  $('sync-interval').value = data.syncIntervalMinutes || 10;
   $('table-workspaces').value = data.tables?.workspaces || DEFAULT_TABLES.workspaces;
   $('table-priorities').value = data.tables?.priorities || DEFAULT_TABLES.priorities;
   $('table-tasks').value = data.tables?.tasks || DEFAULT_TABLES.tasks;

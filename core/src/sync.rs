@@ -33,6 +33,37 @@ impl SyncSnapshot {
             work_sessions: self.work_sessions.len(),
         }
     }
+
+    /// `TaskStore` 的迁移会创建固定的工作区和分级。它们不是用户创建的
+    /// 数据，因此刚初始化的设备首次连接到已有远端时不能把这些种子上传。
+    pub fn is_bootstrap_seed(&self) -> bool {
+        const SEED_TIME: &str = "1970-01-01T00:00:00.000Z";
+
+        self.tasks.is_empty()
+            && self.task_blocks.is_empty()
+            && self.work_sessions.is_empty()
+            && !self.workspaces.is_empty()
+            && self.workspaces.iter().all(|workspace| {
+                workspace.created_at == SEED_TIME
+                    && workspace.updated_at == SEED_TIME
+                    && workspace.deleted_at.is_none()
+                    && workspace.version == 1
+            })
+            && self.priorities.iter().all(|priority| {
+                priority.created_at == SEED_TIME
+                    && priority.updated_at == SEED_TIME
+                    && priority.deleted_at.is_none()
+                    && priority.version == 1
+            })
+    }
+
+    fn has_records(&self) -> bool {
+        !self.workspaces.is_empty()
+            || !self.priorities.is_empty()
+            || !self.tasks.is_empty()
+            || !self.task_blocks.is_empty()
+            || !self.work_sessions.is_empty()
+    }
 }
 
 trait SyncRecord {
@@ -162,6 +193,15 @@ impl SyncRecord for WorkSession {
 }
 
 pub fn merge_sync_snapshots(local: SyncSnapshot, remote: SyncSnapshot) -> SyncSnapshot {
+    // A new local database contains migration seeds such as daily/work/P0.
+    // If a remote snapshot already exists, those records are implementation
+    // defaults rather than local user intent. Excluding them here makes the
+    // first sync a download of the remote state; later syncs remain two-way.
+    let local = if local.is_bootstrap_seed() && remote.has_records() {
+        SyncSnapshot::default()
+    } else {
+        local
+    };
     let mut merged = SyncSnapshot {
         workspaces: merge_by_id(local.workspaces, remote.workspaces),
         priorities: merge_by_id(local.priorities, remote.priorities),

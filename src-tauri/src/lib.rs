@@ -1,5 +1,5 @@
 use cardhannis_core::{TaskService, TaskStore};
-use std::{fs, sync::Arc};
+use std::{fs, sync::Arc, time::Duration};
 use tauri::{
     Manager,
     menu::{Menu, MenuItem},
@@ -38,11 +38,14 @@ mod web;
 
 fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
-        if window.is_visible().unwrap_or(false) {
-            let _ = window.hide();
-        } else {
+        let visible = window.is_visible().unwrap_or(false);
+        let focused = window.is_focused().unwrap_or(false);
+        if !visible || !focused {
             let _ = window.show();
+            let _ = window.unminimize();
             let _ = window.set_focus();
+        } else {
+            let _ = window.hide();
         }
     }
 }
@@ -76,6 +79,49 @@ mod commands {
         let url = state.web.url();
         webbrowser::open(&url).map_err(|error| format!("无法打开浏览器: {error}"))?;
         Ok(())
+    }
+
+    #[tauri::command]
+    pub fn sync_status(state: State<'_, AppState>) -> crate::web::SyncRuntimeStatus {
+        state.web.sync_status()
+    }
+
+    #[tauri::command]
+    pub fn list_system_fonts() -> Vec<String> {
+        #[cfg(target_os = "windows")]
+        {
+            use std::collections::BTreeSet;
+            use winreg::{RegKey, enums::*};
+
+            let mut fonts = BTreeSet::new();
+            for root in [
+                RegKey::predef(HKEY_CURRENT_USER),
+                RegKey::predef(HKEY_LOCAL_MACHINE),
+            ] {
+                let Ok(key) =
+                    root.open_subkey("Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts")
+                else {
+                    continue;
+                };
+                for value in key.enum_values().flatten() {
+                    let name = value.0;
+                    let family = name
+                        .split_once(" (")
+                        .map(|(family, _)| family)
+                        .unwrap_or(name.as_str())
+                        .trim();
+                    if !family.is_empty() {
+                        fonts.insert(family.to_owned());
+                    }
+                }
+            }
+            return fonts.into_iter().collect();
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            Vec::new()
+        }
     }
 
     #[derive(Debug, serde::Deserialize)]
@@ -362,6 +408,25 @@ pub fn run() {
                 TaskStore::open(database_path.clone()).map_err(|error| error.to_string())?;
             let service = Arc::new(TaskService::new(store));
             let web = crate::web::WebConsoleState::new(service.clone(), database_path);
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(size) = window.outer_size() {
+                    if size.width < 100 || size.height < 100 {
+                        let _ = window
+                            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(340.0, 400.0)));
+                    }
+                }
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            let startup_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                if let Some(window) = startup_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            });
             let auto_sync = web.clone();
             tauri::async_runtime::spawn(async move {
                 auto_sync.auto_sync_loop().await;
@@ -422,6 +487,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_tasks,
             commands::open_web_console,
+            commands::sync_status,
+            commands::list_system_fonts,
             commands::create_task,
             commands::update_task,
             commands::complete_task,
