@@ -273,6 +273,55 @@ mod tests {
     }
 
     #[test]
+    fn workspace_reorder_keeps_done_last() {
+        let service = service();
+        let daily = service.workspace("daily").unwrap().unwrap();
+        let work = service.workspace("work").unwrap().unwrap();
+
+        let ordered_ids = vec![work.id.clone(), daily.id.clone()];
+        let expected_versions = vec![work.version, daily.version];
+        let reordered = service
+            .reorder_workspaces(&ordered_ids, &expected_versions)
+            .unwrap();
+        let names: Vec<&str> = reordered
+            .iter()
+            .map(|workspace| workspace.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["工作", "日常", "已完成"]);
+        assert_eq!(
+            reordered.last().map(|workspace| workspace.id.as_str()),
+            Some("done")
+        );
+
+        let project = service.create_workspace("项目").unwrap();
+        let workspaces = service.workspaces(false).unwrap();
+        assert_eq!(
+            workspaces.last().map(|workspace| workspace.id.as_str()),
+            Some("done")
+        );
+        assert_eq!(
+            workspaces
+                .iter()
+                .map(|workspace| workspace.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                work.id.as_str(),
+                daily.id.as_str(),
+                project.id.as_str(),
+                "done"
+            ]
+        );
+
+        let daily = service.workspace("daily").unwrap().unwrap();
+        let stale_version = daily.version - 1;
+        let err = service.reorder_workspaces(
+            &[daily.id.clone(), work.id.clone(), project.id.clone()],
+            &[stale_version, work.version, project.version],
+        );
+        assert!(matches!(err, Err(CoreError::VersionConflict)));
+    }
+
+    #[test]
     fn completion_archives_to_done_workspace_and_reopen_returns_home() {
         let service = service();
         // done 工作区由迁移种子
@@ -303,11 +352,72 @@ mod tests {
         let reopened = service.reopen(&done.id, done.version).unwrap();
         assert_eq!(reopened.workspace_id.as_deref(), Some(ws.id.as_str()));
 
-        // 内置工作区（含已完成）不能删除
+        // 只有「已完成」是内置工作区；日常/工作在为空时可删除。
+        let daily = service.workspace("daily").unwrap().unwrap();
+        assert!(!daily.builtin);
+        service.delete_workspace("daily", daily.version).unwrap();
+        assert!(service.workspace("daily").unwrap().is_none());
+
+        let work = service.workspace("work").unwrap().unwrap();
+        assert!(!work.builtin);
+        service.delete_workspace("work", work.version).unwrap();
+        assert!(service.workspace("work").unwrap().is_none());
+
         let err = service.delete_workspace("done", 1).unwrap_err();
         assert!(matches!(err, CoreError::InvalidState(_)));
-        let err = service.delete_workspace("daily", 1).unwrap_err();
-        assert!(matches!(err, CoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn updating_archived_task_preserves_historical_priority() {
+        let service = service();
+        let workspace = service.create_workspace("项目Y").unwrap();
+        let priority = service
+            .priorities(false)
+            .unwrap()
+            .into_iter()
+            .find(|priority| priority.workspace_id == workspace.id)
+            .unwrap();
+        let task = service
+            .create(CreateTaskCommand {
+                title: "归档后编辑".into(),
+                notes: None,
+                estimated_active_minutes: None,
+                due_date: None,
+                sort_order: 0,
+                created_device_id: "test-device".into(),
+                workspace_id: Some(workspace.id.clone()),
+                priority_id: Some(priority.id.clone()),
+            })
+            .unwrap();
+        let done = service.complete(&task.id, task.version).unwrap();
+        let updated = service
+            .update(
+                &done.id,
+                done.version,
+                UpdateTaskCommand {
+                    title: "归档后已编辑".into(),
+                    notes: done.notes.clone(),
+                    review_notes: done.review_notes.clone(),
+                    estimated_active_minutes: done.estimated_active_minutes,
+                    due_date: done.due_date.clone(),
+                    sort_order: done.sort_order,
+                    workspace_id: done.workspace_id.clone(),
+                    priority_id: done.priority_id.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.title, "归档后已编辑");
+        assert_eq!(updated.workspace_id.as_deref(), Some("done"));
+        assert_eq!(
+            updated.home_workspace_id.as_deref(),
+            Some(workspace.id.as_str())
+        );
+        assert_eq!(updated.priority_id.as_deref(), Some(priority.id.as_str()));
+        let reopened = service.reopen(&updated.id, updated.version).unwrap();
+        assert_eq!(
+            reopened.workspace_id.as_deref(),
+            Some(workspace.id.as_str())
+        );
     }
 
     #[test]
@@ -415,5 +525,347 @@ mod tests {
         // 未完成任务不能重新打开
         let err = service.reopen(&reopened.id, reopened.version).unwrap_err();
         assert!(matches!(err, CoreError::InvalidState(_)));
+    }
+
+    #[test]
+    fn correcting_active_work_time_shortens_and_restarts() {
+        let service = service();
+        let task = service
+            .store()
+            .create_task_at(
+                NewTask {
+                    title: "修正进行中".into(),
+                    notes: None,
+                    estimated_active_minutes: None,
+                    due_date: None,
+                    sort_order: 0,
+                    created_device_id: "test-device".into(),
+                    workspace_id: None,
+                    priority_id: None,
+                },
+                "2026-01-01T08:00:00.000Z",
+            )
+            .unwrap();
+        service
+            .store()
+            .start_work(&task.id, "2026-01-01T08:00:00.000Z", None)
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+
+        let corrected = service
+            .store()
+            .correct_work_time_at(&task.id, task.version, 180, "2026-01-01T18:00:00.000Z")
+            .unwrap();
+
+        assert_eq!(corrected.status, TaskStatus::InProgress);
+        let sessions = service.sessions(&task.id).unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].started_at, "2026-01-01T15:00:00.000Z");
+        assert_eq!(
+            sessions[0].ended_at.as_deref(),
+            Some("2026-01-01T18:00:00.000Z")
+        );
+        assert_eq!(sessions[1].started_at, "2026-01-01T18:00:00.000Z");
+        assert!(sessions[1].ended_at.is_none());
+    }
+
+    #[test]
+    fn correcting_pending_work_time_updates_last_pause() {
+        let service = service();
+        let task = service
+            .store()
+            .create_task_at(
+                NewTask {
+                    title: "修正待办".into(),
+                    notes: None,
+                    estimated_active_minutes: None,
+                    due_date: None,
+                    sort_order: 0,
+                    created_device_id: "test-device".into(),
+                    workspace_id: None,
+                    priority_id: None,
+                },
+                "2026-01-01T08:00:00.000Z",
+            )
+            .unwrap();
+        service
+            .store()
+            .start_work(&task.id, "2026-01-01T08:00:00.000Z", None)
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+        service
+            .store()
+            .set_status(
+                &task.id,
+                task.version,
+                TaskStatus::Pending,
+                "2026-01-01T18:00:00.000Z",
+            )
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+
+        let corrected = service
+            .store()
+            .correct_work_time_at(&task.id, task.version, 180, "2026-01-01T18:00:00.000Z")
+            .unwrap();
+
+        assert_eq!(corrected.status, TaskStatus::Pending);
+        let sessions = service.sessions(&task.id).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].started_at, "2026-01-01T15:00:00.000Z");
+        assert_eq!(
+            sessions[0].ended_at.as_deref(),
+            Some("2026-01-01T18:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn correcting_work_time_without_history_creates_session() {
+        let service = service();
+        let task = service
+            .store()
+            .create_task_at(
+                NewTask {
+                    title: "补录时间".into(),
+                    notes: None,
+                    estimated_active_minutes: None,
+                    due_date: None,
+                    sort_order: 0,
+                    created_device_id: "test-device".into(),
+                    workspace_id: None,
+                    priority_id: None,
+                },
+                "2026-01-01T08:00:00.000Z",
+            )
+            .unwrap();
+
+        let corrected = service
+            .store()
+            .correct_work_time_at(&task.id, task.version, 180, "2026-01-01T18:00:00.000Z")
+            .unwrap();
+
+        assert_eq!(corrected.status, TaskStatus::Pending);
+        let sessions = service.sessions(&task.id).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].started_at, "2026-01-01T15:00:00.000Z");
+        assert_eq!(
+            sessions[0].ended_at.as_deref(),
+            Some("2026-01-01T18:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn correcting_work_time_respects_blocks() {
+        let service = service();
+        let task = service
+            .store()
+            .create_task_at(
+                NewTask {
+                    title: "阻塞边界".into(),
+                    notes: None,
+                    estimated_active_minutes: None,
+                    due_date: None,
+                    sort_order: 0,
+                    created_device_id: "test-device".into(),
+                    workspace_id: None,
+                    priority_id: None,
+                },
+                "2026-01-01T08:00:00.000Z",
+            )
+            .unwrap();
+        service
+            .store()
+            .start_work(&task.id, "2026-01-01T08:00:00.000Z", None)
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+        let block = service
+            .store()
+            .start_block(&task.id, "等待依赖", None, "2026-01-01T12:00:00.000Z")
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+
+        let corrected = service
+            .store()
+            .correct_work_time_at(&task.id, task.version, 180, "2026-01-01T12:00:00.000Z")
+            .unwrap();
+
+        assert_eq!(corrected.status, TaskStatus::InProgress);
+        assert!(corrected.is_blocked);
+        let sessions = service.sessions(&task.id).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].started_at, "2026-01-01T09:00:00.000Z");
+        assert_eq!(
+            sessions[0].ended_at.as_deref(),
+            Some("2026-01-01T12:00:00.000Z")
+        );
+        assert_eq!(block.started_at, "2026-01-01T12:00:00.000Z");
+    }
+
+    #[test]
+    fn correcting_work_time_respects_completion_time() {
+        let service = service();
+        let task = service
+            .store()
+            .create_task_at(
+                NewTask {
+                    title: "完成边界".into(),
+                    notes: None,
+                    estimated_active_minutes: None,
+                    due_date: None,
+                    sort_order: 0,
+                    created_device_id: "test-device".into(),
+                    workspace_id: None,
+                    priority_id: None,
+                },
+                "2026-01-01T08:00:00.000Z",
+            )
+            .unwrap();
+        service
+            .store()
+            .start_work(&task.id, "2026-01-01T08:00:00.000Z", None)
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+        service
+            .store()
+            .set_status(
+                &task.id,
+                task.version,
+                TaskStatus::Completed,
+                "2026-01-01T18:00:00.000Z",
+            )
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+
+        let corrected = service
+            .store()
+            .correct_work_time_at(&task.id, task.version, 180, "2026-01-01T20:00:00.000Z")
+            .unwrap();
+
+        assert_eq!(corrected.status, TaskStatus::Completed);
+        let sessions = service.sessions(&task.id).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].started_at, "2026-01-01T15:00:00.000Z");
+        assert_eq!(
+            sessions[0].ended_at.as_deref(),
+            Some("2026-01-01T18:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn correcting_work_time_can_recurse_across_available_windows() {
+        let service = service();
+        let task = service
+            .store()
+            .create_task_at(
+                NewTask {
+                    title: "递归修正".into(),
+                    notes: None,
+                    estimated_active_minutes: None,
+                    due_date: None,
+                    sort_order: 0,
+                    created_device_id: "test-device".into(),
+                    workspace_id: None,
+                    priority_id: None,
+                },
+                "2026-01-01T08:00:00.000Z",
+            )
+            .unwrap();
+        service
+            .store()
+            .start_work(&task.id, "2026-01-01T08:00:00.000Z", None)
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+        service
+            .store()
+            .set_status(
+                &task.id,
+                task.version,
+                TaskStatus::Pending,
+                "2026-01-01T09:00:00.000Z",
+            )
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+        let block = service
+            .store()
+            .start_block(&task.id, "等待依赖", None, "2026-01-01T09:00:00.000Z")
+            .unwrap();
+        service
+            .store()
+            .end_block(&block.id, block.version, None, "2026-01-01T10:00:00.000Z")
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+        service
+            .store()
+            .start_work(&task.id, "2026-01-01T10:00:00.000Z", None)
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+        service
+            .store()
+            .set_status(
+                &task.id,
+                task.version,
+                TaskStatus::Pending,
+                "2026-01-01T11:00:00.000Z",
+            )
+            .unwrap();
+        let task = service.get(&task.id).unwrap().unwrap();
+
+        let corrected = service
+            .store()
+            .correct_work_time_at(&task.id, task.version, 90, "2026-01-01T11:00:00.000Z")
+            .unwrap();
+
+        assert_eq!(corrected.status, TaskStatus::Pending);
+        let sessions = service.sessions(&task.id).unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].started_at, "2026-01-01T08:30:00.000Z");
+        assert_eq!(
+            sessions[0].ended_at.as_deref(),
+            Some("2026-01-01T09:00:00.000Z")
+        );
+        assert_eq!(sessions[1].started_at, "2026-01-01T10:00:00.000Z");
+        assert_eq!(
+            sessions[1].ended_at.as_deref(),
+            Some("2026-01-01T11:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn correcting_work_time_rejects_invalid_target_and_version() {
+        let service = service();
+        let task = service
+            .store()
+            .create_task_at(
+                NewTask {
+                    title: "非法目标".into(),
+                    notes: None,
+                    estimated_active_minutes: None,
+                    due_date: None,
+                    sort_order: 0,
+                    created_device_id: "test-device".into(),
+                    workspace_id: None,
+                    priority_id: None,
+                },
+                "2026-01-01T08:00:00.000Z",
+            )
+            .unwrap();
+
+        let zero = service
+            .store()
+            .correct_work_time_at(&task.id, task.version, 0, "2026-01-01T18:00:00.000Z")
+            .unwrap_err();
+        assert!(matches!(zero, CoreError::InvalidInput(_)));
+
+        let too_long = service
+            .store()
+            .correct_work_time_at(&task.id, task.version, 120, "2026-01-01T09:00:00.000Z")
+            .unwrap_err();
+        assert!(matches!(too_long, CoreError::InvalidInput(_)));
+
+        let conflict = service
+            .store()
+            .correct_work_time_at(&task.id, task.version + 1, 60, "2026-01-01T09:00:00.000Z")
+            .unwrap_err();
+        assert!(matches!(conflict, CoreError::VersionConflict));
     }
 }

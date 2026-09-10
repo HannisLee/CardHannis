@@ -1,7 +1,11 @@
 use crate::{domain::*, error::*};
-use chrono::{NaiveDate, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, NaiveDate, SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
-use std::{path::Path, sync::Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::Mutex,
+};
 use uuid::Uuid;
 
 const MIGRATIONS: &[(&str, &str)] = &[
@@ -32,6 +36,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0007_workspace_scoped_priorities.sql",
         include_str!("../migrations/0007_workspace_scoped_priorities.sql"),
+    ),
+    (
+        "0008_only_done_builtin_workspace.sql",
+        include_str!("../migrations/0008_only_done_builtin_workspace.sql"),
     ),
 ];
 
@@ -141,17 +149,25 @@ impl TaskStore {
     ) -> Result<Task> {
         validate_task_fields(title, estimated_active_minutes)?;
         validate_due_date(due_date)?;
+        let archived_task_home_workspace = if workspace_id == Some("done") {
+            self.get_task(id)?
+                .ok_or_else(|| CoreError::TaskNotFound(id.to_owned()))?
+                .home_workspace_id
+        } else {
+            None
+        };
         if let Some(priority_id) = priority_id {
             let priority = self
                 .get_priority(priority_id)?
                 .ok_or_else(|| CoreError::PriorityNotFound(priority_id.to_owned()))?;
-            if workspace_id != Some(priority.workspace_id.as_str()) {
+            let validation_workspace = archived_task_home_workspace.as_deref().or(workspace_id);
+            if validation_workspace != Some(priority.workspace_id.as_str()) {
                 return Err(CoreError::InvalidInput("分级不属于当前工作区".into()));
             }
         }
         let connection = self.connection.lock().expect("database mutex poisoned");
         let changed = connection.execute(
-            "UPDATE tasks SET title = ?1, notes = ?2, review_notes = ?3, estimated_active_minutes = ?4, due_date = ?11, sort_order = ?5, workspace_id = ?9, priority_id = ?10, home_workspace_id = COALESCE(?9, home_workspace_id), updated_at = ?6, version = version + 1 WHERE id = ?7 AND version = ?8 AND deleted_at IS NULL",
+            "UPDATE tasks SET title = ?1, notes = ?2, review_notes = ?3, estimated_active_minutes = ?4, due_date = ?11, sort_order = ?5, workspace_id = ?9, priority_id = ?10, home_workspace_id = CASE WHEN ?9 = 'done' THEN home_workspace_id ELSE COALESCE(?9, home_workspace_id) END, updated_at = ?6, version = version + 1 WHERE id = ?7 AND version = ?8 AND deleted_at IS NULL",
             params![
                 title.trim(),
                 notes,
@@ -386,6 +402,130 @@ impl TaskStore {
             .map_err(Into::into)
     }
 
+    pub(crate) fn correct_work_time_at(
+        &self,
+        task_id: &str,
+        expected_version: i64,
+        target_active_minutes: i64,
+        corrected_at: impl Into<String>,
+    ) -> Result<Task> {
+        if target_active_minutes <= 0 {
+            return Err(CoreError::InvalidInput(
+                "目标进行时长必须大于 0 分钟".into(),
+            ));
+        }
+
+        let corrected_at = corrected_at.into();
+        let connection = self.connection.lock().expect("database mutex poisoned");
+        let tx = connection.unchecked_transaction()?;
+        let task =
+            load_task(&tx, task_id)?.ok_or_else(|| CoreError::TaskNotFound(task_id.to_owned()))?;
+        if task.deleted_at.is_some() {
+            return Err(CoreError::InvalidState("已删除任务不能修改".into()));
+        }
+        if task.version != expected_version {
+            return Err(CoreError::VersionConflict);
+        }
+
+        let sessions = query_sessions_for_correction(&tx, task_id)?;
+        let blocks = query_blocks_for_correction(&tx, task_id)?;
+        let active_block = blocks.iter().find(|block| block.ended_at.is_none());
+
+        let upper_bound = if task.status == TaskStatus::Completed {
+            task.completed_at
+                .as_deref()
+                .ok_or_else(|| CoreError::InvalidState("已完成任务缺少完成时间".into()))?
+                .to_owned()
+        } else if let Some(block) = active_block {
+            block.started_at.clone()
+        } else {
+            corrected_at.clone()
+        };
+
+        let lower_bound = task.created_at.clone();
+        let upper = parse_timestamp(&upper_bound)?;
+        let lower = parse_timestamp(&lower_bound)?;
+        if upper <= lower {
+            return Err(CoreError::InvalidState(
+                "任务时间边界无效，无法修正进行时长".into(),
+            ));
+        }
+
+        let hard_blocks = clipped_blocks(&blocks, lower, upper)?;
+        let windows = available_windows(lower, upper, &hard_blocks);
+        let target = Duration::try_minutes(target_active_minutes)
+            .ok_or_else(|| CoreError::InvalidInput("目标进行时长超出可表示范围".into()))?;
+        let segments = latest_segments(&windows, target)?;
+
+        let in_progress = task.status == TaskStatus::InProgress && !task.is_blocked;
+        let desired_count = segments.len() + usize::from(in_progress);
+        if desired_count == 0 {
+            return Err(CoreError::InvalidState("没有可用的进行时间区间".into()));
+        }
+
+        if sessions.len() > desired_count {
+            let extra_ids: Vec<&str> = sessions[desired_count..]
+                .iter()
+                .map(|session| session.id.as_str())
+                .collect();
+            for id in extra_ids {
+                tx.execute("DELETE FROM work_sessions WHERE id = ?1", params![id])?;
+            }
+        }
+
+        let reuse_count = sessions.len().min(desired_count);
+        for index in 0..reuse_count {
+            let session = &sessions[index];
+            if index < segments.len() {
+                let segment = segments[index];
+                tx.execute(
+                    "UPDATE work_sessions SET started_at = ?1, ended_at = ?2 WHERE id = ?3",
+                    params![
+                        format_timestamp(segment.0),
+                        format_timestamp(segment.1),
+                        session.id
+                    ],
+                )?;
+            } else {
+                tx.execute(
+                    "UPDATE work_sessions SET started_at = ?1, ended_at = NULL WHERE id = ?2",
+                    params![format_timestamp(upper), session.id],
+                )?;
+            }
+        }
+
+        if sessions.len() < desired_count {
+            for index in sessions.len()..desired_count {
+                let id = Uuid::new_v4().to_string();
+                if index < segments.len() {
+                    let segment = segments[index];
+                    tx.execute(
+                        "INSERT INTO work_sessions (id, task_id, started_at, ended_at, note, created_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+                        params![id, task_id, format_timestamp(segment.0), format_timestamp(segment.1), format_timestamp(upper)],
+                    )?;
+                } else {
+                    tx.execute(
+                        "INSERT INTO work_sessions (id, task_id, started_at, ended_at, note, created_at) VALUES (?1, ?2, ?3, NULL, NULL, ?4)",
+                        params![id, task_id, format_timestamp(upper), format_timestamp(upper)],
+                    )?;
+                }
+            }
+        }
+
+        let changed = tx.execute(
+            "UPDATE tasks SET updated_at = ?1, version = version + 1 WHERE id = ?2 AND version = ?3 AND deleted_at IS NULL",
+            params![corrected_at, task_id, expected_version],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::VersionConflict);
+        }
+
+        tx.commit()?;
+        drop(connection);
+        self.get_task(task_id)?
+            .ok_or_else(|| CoreError::TaskNotFound(task_id.to_owned()))
+    }
+
     // ===== 工作区 =====
     pub fn create_workspace(&self, name: &str, created_at: impl Into<String>) -> Result<Workspace> {
         if name.trim().is_empty() {
@@ -420,7 +560,7 @@ impl TaskStore {
         let connection = self.connection.lock().expect("database mutex poisoned");
         let max = connection
             .query_row(
-                "SELECT COALESCE(MAX(sort_order), -1) FROM workspaces WHERE deleted_at IS NULL",
+                "SELECT COALESCE(MAX(sort_order), -1) FROM workspaces WHERE deleted_at IS NULL AND id <> 'done'",
                 [],
                 |r| r.get::<_, i64>(0),
             )
@@ -431,14 +571,82 @@ impl TaskStore {
     pub fn list_workspaces(&self, include_deleted: bool) -> Result<Vec<Workspace>> {
         let connection = self.connection.lock().expect("database mutex poisoned");
         let sql = if include_deleted {
-            "SELECT id, name, sort_order, builtin, created_at, updated_at, deleted_at, version FROM workspaces ORDER BY sort_order, created_at"
+            "SELECT id, name, sort_order, builtin, created_at, updated_at, deleted_at, version FROM workspaces ORDER BY CASE WHEN id = 'done' THEN 1 ELSE 0 END, sort_order, created_at"
         } else {
-            "SELECT id, name, sort_order, builtin, created_at, updated_at, deleted_at, version FROM workspaces WHERE deleted_at IS NULL ORDER BY sort_order, created_at"
+            "SELECT id, name, sort_order, builtin, created_at, updated_at, deleted_at, version FROM workspaces WHERE deleted_at IS NULL ORDER BY CASE WHEN id = 'done' THEN 1 ELSE 0 END, sort_order, created_at"
         };
         let mut statement = connection.prepare(sql)?;
         let rows = statement.query_map([], map_workspace)?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
+    }
+
+    pub fn reorder_workspaces(
+        &self,
+        ordered_ids: &[String],
+        expected_versions: &[i64],
+        updated_at: impl Into<String>,
+    ) -> Result<Vec<Workspace>> {
+        if ordered_ids.len() != expected_versions.len() {
+            return Err(CoreError::InvalidInput(
+                "工作区排序的 ID 与版本数量不一致".into(),
+            ));
+        }
+
+        let updated_at = updated_at.into();
+        let connection = self.connection.lock().expect("database mutex poisoned");
+        let mut statement = connection.prepare(
+            "SELECT id, name, sort_order, builtin, created_at, updated_at, deleted_at, version FROM workspaces WHERE deleted_at IS NULL",
+        )?;
+        let rows = statement.query_map([], map_workspace)?;
+        let active_workspaces: Vec<Workspace> = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        let active_workspace_map: HashMap<&str, &Workspace> = active_workspaces
+            .iter()
+            .map(|workspace| (workspace.id.as_str(), workspace))
+            .collect();
+        let movable_workspace_count = active_workspaces
+            .iter()
+            .filter(|workspace| !workspace.builtin)
+            .count();
+        let mut seen_ids = HashSet::with_capacity(ordered_ids.len());
+        for (id, expected_version) in ordered_ids.iter().zip(expected_versions) {
+            if !seen_ids.insert(id.as_str()) {
+                return Err(CoreError::InvalidInput("工作区排序包含重复 ID".into()));
+            }
+            let workspace = active_workspace_map
+                .get(id.as_str())
+                .copied()
+                .ok_or_else(|| CoreError::WorkspaceNotFound(id.clone()))?;
+            if workspace.builtin {
+                return Err(CoreError::InvalidState("内置工作区不能参与排序".into()));
+            }
+            if workspace.version != *expected_version {
+                return Err(CoreError::VersionConflict);
+            }
+        }
+        if seen_ids.len() != movable_workspace_count {
+            return Err(CoreError::InvalidInput(
+                "工作区排序必须包含所有普通工作区".into(),
+            ));
+        }
+
+        let tx = connection.unchecked_transaction()?;
+        for (sort_order, (id, expected_version)) in
+            ordered_ids.iter().zip(expected_versions).enumerate()
+        {
+            let changed = tx.execute(
+                "UPDATE workspaces SET sort_order = ?1, updated_at = ?2, version = version + 1 WHERE id = ?3 AND version = ?4 AND deleted_at IS NULL",
+                params![sort_order as i64, updated_at, id, expected_version],
+            )?;
+            if changed == 0 {
+                return Err(CoreError::VersionConflict);
+            }
+        }
+        tx.commit()?;
+        drop(connection);
+        self.list_workspaces(false)
     }
 
     pub fn get_workspace(&self, id: &str) -> Result<Option<Workspace>> {
@@ -786,6 +994,116 @@ fn map_block(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskBlock> {
         deleted_at: row.get(10)?,
     })
 }
+fn query_sessions_for_correction(
+    connection: &Connection,
+    task_id: &str,
+) -> Result<Vec<WorkSession>> {
+    let mut statement = connection.prepare(
+        "SELECT id, task_id, started_at, ended_at, note, created_at FROM work_sessions WHERE task_id = ?1 ORDER BY started_at",
+    )?;
+    let rows = statement.query_map(params![task_id], map_session)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn query_blocks_for_correction(connection: &Connection, task_id: &str) -> Result<Vec<TaskBlock>> {
+    let mut statement = connection.prepare(
+        "SELECT id, task_id, started_at, ended_at, reason, note, resolution_reason, created_at, updated_at, version, deleted_at FROM task_blocks WHERE task_id = ?1 AND deleted_at IS NULL ORDER BY started_at",
+    )?;
+    let rows = statement.query_map(params![task_id], map_block)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn parse_timestamp(value: &str) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|time| time.with_timezone(&Utc))
+        .map_err(|_| CoreError::InvalidState("时间格式无效".into()))
+}
+
+fn format_timestamp(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn clipped_blocks(
+    blocks: &[TaskBlock],
+    lower: DateTime<Utc>,
+    upper: DateTime<Utc>,
+) -> Result<Vec<(DateTime<Utc>, DateTime<Utc>)>> {
+    let mut clipped: Vec<(DateTime<Utc>, DateTime<Utc>)> = Vec::new();
+    for block in blocks {
+        let start = parse_timestamp(&block.started_at)?;
+        let end = block
+            .ended_at
+            .as_deref()
+            .map(parse_timestamp)
+            .transpose()?
+            .unwrap_or(upper);
+        let start = start.max(lower);
+        let end = end.min(upper);
+        if start < end {
+            clipped.push((start, end));
+        }
+    }
+    clipped.sort_by_key(|(start, _)| *start);
+
+    let mut merged: Vec<(DateTime<Utc>, DateTime<Utc>)> = Vec::new();
+    for (start, end) in clipped {
+        if let Some(last) = merged.last_mut() {
+            if start <= last.1 {
+                last.1 = last.1.max(end);
+                continue;
+            }
+        }
+        merged.push((start, end));
+    }
+    Ok(merged)
+}
+
+fn available_windows(
+    lower: DateTime<Utc>,
+    upper: DateTime<Utc>,
+    blocks: &[(DateTime<Utc>, DateTime<Utc>)],
+) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
+    let mut windows = Vec::new();
+    let mut cursor = lower;
+    for (start, end) in blocks {
+        if *start > cursor {
+            windows.push((cursor, *start));
+        }
+        cursor = cursor.max(*end);
+    }
+    if cursor < upper {
+        windows.push((cursor, upper));
+    }
+    windows
+}
+
+fn latest_segments(
+    windows: &[(DateTime<Utc>, DateTime<Utc>)],
+    target: Duration,
+) -> Result<Vec<(DateTime<Utc>, DateTime<Utc>)>> {
+    let mut selected = Vec::new();
+    let mut remaining = target;
+    for (start, end) in windows.iter().rev() {
+        let available = *end - *start;
+        if remaining <= available {
+            selected.push((*end - remaining, *end));
+            remaining = Duration::zero();
+            break;
+        }
+        selected.push((*start, *end));
+        remaining = remaining - available;
+    }
+    if remaining > Duration::zero() {
+        return Err(CoreError::InvalidInput(
+            "目标进行时长超过可用时间范围".into(),
+        ));
+    }
+    selected.reverse();
+    Ok(selected)
+}
+
 fn map_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkSession> {
     Ok(WorkSession {
         id: row.get(0)?,

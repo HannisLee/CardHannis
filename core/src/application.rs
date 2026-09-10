@@ -81,6 +81,16 @@ impl TaskService {
         self.store.end_work(session_id, now())
     }
 
+    pub fn correct_work_time(
+        &self,
+        task_id: &str,
+        expected_version: i64,
+        target_active_minutes: i64,
+    ) -> Result<Task> {
+        self.store
+            .correct_work_time_at(task_id, expected_version, target_active_minutes, now())
+    }
+
     pub fn block(&self, task_id: &str, command: BlockTaskCommand) -> Result<TaskBlock> {
         self.store
             .start_block(task_id, &command.reason, command.note.as_deref(), now())
@@ -134,6 +144,14 @@ impl TaskService {
     pub fn delete_workspace(&self, id: &str, expected_version: i64) -> Result<()> {
         self.store
             .soft_delete_workspace(id, expected_version, now())
+    }
+    pub fn reorder_workspaces(
+        &self,
+        ordered_ids: &[String],
+        expected_versions: &[i64],
+    ) -> Result<Vec<Workspace>> {
+        self.store
+            .reorder_workspaces(ordered_ids, expected_versions, now())
     }
 
     // ===== 优先级分级 =====

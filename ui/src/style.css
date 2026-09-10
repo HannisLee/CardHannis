@@ -47,6 +47,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 .win-content { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--paper); opacity: var(--content-opacity); transition: opacity .15s ease; }
 html.content-hidden .win-content { pointer-events: none; }
+html.content-hidden .win-sheet { border-color: transparent; }
+html.content-hidden .win-bar { border-bottom-color: transparent; border-radius: 0 0 12px 12px; }
 
 /* 标题条（可拖动） */
 .win-bar { display: flex; align-items: center; gap: 8px; padding: 8px 7px 8px 11px; border-bottom: 1px solid rgba(21, 46, 37, .32); background: linear-gradient(180deg, #376052 0%, var(--green) 62%, var(--green-deep) 100%); color: #f2f6f1; user-select: none; -webkit-user-select: none; flex: none; cursor: grab; }
@@ -139,6 +141,8 @@ dialog::backdrop { background: rgba(40, 46, 38, .3); backdrop-filter: blur(2px);
 .ws-tabs { display: flex; gap: 3px; overflow-x: auto; flex: 1; scrollbar-width: none; }
 .ws-tabs::-webkit-scrollbar { display: none; }
 .ws-tab { flex: none; display: inline-flex; align-items: center; gap: 3px; border: 1px solid rgba(112, 109, 88, .22); border-radius: 6px; padding: 2px 6px; background: rgba(255, 255, 255, .18); font-size: calc(12px + var(--ui-font-delta)); font-weight: 700; line-height: 1.15; color: #71796c; }
+.ws-tab:not([data-ws="done"]) { cursor: grab; touch-action: none; }
+.ws-tab.dragging { opacity: .68; cursor: grabbing; transform: translateY(1px); }
 .ws-tab b { min-width: 10px; font-size: calc(10.5px + var(--ui-font-delta)); font-weight: 800; color: #9b9a88; text-align: center; }
 .ws-tab:hover { background: rgba(60, 104, 87, .08); }
 .ws-tab.active { background: var(--green); border-color: var(--green); box-shadow: 0 1px 2px rgba(37, 69, 57, .18), inset 0 1px 0 rgba(255, 255, 255, .1); color: #f2f5f1; }
@@ -161,6 +165,7 @@ dialog::backdrop { background: rgba(40, 46, 38, .3); backdrop-filter: blur(2px);
 
 /* 对话框双列 */
 .dlg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dlg-card output { min-height: 37px; display: flex; align-items: center; padding: 8px 9px; border: 1px dashed #d7d2c0; border-radius: 8px; color: #5f6b62; background: #f7f4e8; font-family: ui-monospace, Menlo, monospace; font-size: calc(14px + var(--ui-font-delta)); font-weight: 700; }
 .dlg-card select { width: 100%; border: 1px solid #d7d2c0; border-radius: 8px; padding: 7px 8px; color: #33403a; background: #fff; font-size: calc(14.5px + var(--ui-font-delta)); }
 
 .row-empty { padding: 0 6px 2px; color: #a4a08d; font-size: calc(11px + var(--ui-font-delta)); line-height: 1.35; }

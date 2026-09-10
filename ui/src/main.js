@@ -4,7 +4,7 @@ import { LogicalPosition } from '@tauri-apps/api/dpi';
 import './style.css';
 
 const app = document.querySelector('#app');
-const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, finishedSessionMinutesByTask: {}, sessionMinutesByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null, unblockingTaskId: null };
+const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, finishedSessionMinutesByTask: {}, sessionMinutesByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null, unblockingTaskId: null, editingTask: null, editingTaskSessions: [], editingTaskCurrentMinutes: 0 };
 const COLLAPSE_KEY = 'cardha…e.v2';
 const OPACITY_KEY = 'cardhannis.sticky.opacity.v1';
 // v2 将用户确认的旧版 +2px 视觉大小固化为新的零点。
@@ -26,6 +26,14 @@ function applyContentOpacity() {
   const opacity = expanded ? 100 : unfocusedOpacity;
   document.documentElement.style.setProperty('--content-opacity', (opacity / 100).toFixed(2));
   document.documentElement.classList.toggle('content-hidden', opacity === 0);
+}
+let mousePositionUpdateHandle = 0;
+function scheduleMousePositionUpdate() {
+  if (mousePositionUpdateHandle) return;
+  mousePositionUpdateHandle = requestAnimationFrame(() => {
+    mousePositionUpdateHandle = 0;
+    void updateMouseInside();
+  });
 }
 let collapsed = {};
 try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch {}
@@ -211,6 +219,8 @@ function render() {
       <div class="dlg-grid">
         <label>预计小时<input name="estimated" type="number" min="0" step="0.5" placeholder="2" /></label>
         <label>完成日期<input name="dueDate" type="date" /></label>
+        <label>当前进行<output name="currentActive">0h</output></label>
+        <label>修正为（小时）<input name="correctedActive" type="number" min="0" step="0.5" placeholder="3" /></label>
       </div>
       <label>备注<textarea name="notes" rows="2" placeholder="可选"></textarea></label>
       <div class="dlg-actions"><button class="ghost" type="button" data-close>取消</button><button class="ok" id="task-ok" type="button">贴上</button></div>
@@ -272,8 +282,10 @@ function render() {
   document.querySelector('.win')?.addEventListener('mouseleave', () => {
     mouseInside = false;
     mouseInTitleBar = false;
-    zeroOpacityExpanded = false;
-    applyContentOpacity();
+    // 0% 时的唤醒状态只能由全局鼠标位置确认“确实离开窗口”后清除。
+    // 重绘/右键菜单会让 DOM mouseleave 触发，但鼠标仍可能在窗口内。
+    if (unfocusedOpacity === 0) scheduleMousePositionUpdate();
+    else applyContentOpacity();
   });
   document.querySelector('.win-bar')?.addEventListener('mouseenter', () => {
     mouseInside = true;
@@ -283,8 +295,10 @@ function render() {
   });
   document.querySelector('.win-bar')?.addEventListener('mouseleave', () => {
     mouseInTitleBar = false;
+    if (unfocusedOpacity === 0) scheduleMousePositionUpdate();
   });
   document.querySelector('#btn-new')?.addEventListener('click', () => openTaskDialog(null));
+  document.querySelector('#task-dialog')?.addEventListener('close', () => { state.editingTask = null; state.editingTaskSessions = []; state.editingTaskCurrentMinutes = 0; });
   document.querySelector('#btn-settings')?.addEventListener('click', () => document.querySelector('#settings-dialog').showModal());
   document.querySelector('#opacity-range')?.addEventListener('input', (e) => {
     const v = normalizeOpacity(e.target.value);
@@ -310,10 +324,17 @@ function render() {
   document.querySelector('#btn-min')?.addEventListener('click', () => theWindow()?.hide());
   document.querySelector('#btn-close')?.addEventListener('click', () => theWindow()?.hide());
   document.querySelector('#ws-add')?.addEventListener('click', addWorkspace);
-  document.querySelectorAll('.ws-tab').forEach((tab) => tab.addEventListener('click', () => {
-    state.activeWs = tab.dataset.ws;
-    render();
-  }));
+  document.querySelectorAll('.ws-tab').forEach((tab) => {
+    tab.addEventListener('pointerdown', startWorkspaceDrag);
+    tab.addEventListener('click', () => {
+      if (suppressWorkspaceClick) {
+        suppressWorkspaceClick = false;
+        return;
+      }
+      state.activeWs = tab.dataset.ws;
+      render();
+    });
+  });
   document.querySelectorAll('[data-toggle]').forEach((head) => head.addEventListener('click', () => {
     const key = `${state.activeWs}:${head.dataset.toggle}`;
     collapsed[key] = !collapsed[key];
@@ -323,6 +344,112 @@ function render() {
   document.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', () => handleGroupTool(b)));
   document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button)));
 }
+
+let wsDragState = null;
+let suppressWorkspaceClick = false;
+function workspaceIdsFromDom() {
+  return [...document.querySelectorAll('.ws-tabs .ws-tab')]
+    .map((tab) => tab.dataset.ws)
+    .filter((id) => id && id !== 'done');
+}
+function applyWorkspaceOrderLocally(orderedIds) {
+  const byId = new Map(state.workspaces.map((workspace) => [workspace.id, workspace]));
+  state.workspaces = [
+    ...orderedIds.map((id) => byId.get(id)).filter(Boolean),
+    ...state.workspaces.filter((workspace) => workspace.id === 'done'),
+  ];
+}
+async function persistWorkspaceOrder(orderedIds) {
+  const currentIds = state.workspaces
+    .filter((workspace) => workspace.id !== 'done')
+    .map((workspace) => workspace.id);
+  if (orderedIds.length === currentIds.length && orderedIds.every((id, index) => id === currentIds[index])) {
+    render();
+    return;
+  }
+  const byId = new Map(state.workspaces.map((workspace) => [workspace.id, workspace]));
+  const expectedVersions = orderedIds.map((id) => byId.get(id)?.version);
+  if (expectedVersions.some((version) => version == null)) return;
+  try {
+    state.workspaces = await call('reorder_workspaces', {
+      orderedIds,
+      expectedVersions,
+    });
+    render();
+    notify('工作区顺序已更新');
+  } catch (error) {
+    await loadMeta();
+    render();
+    notify(errorMessage(error, '工作区排序失败'));
+  }
+}
+function startWorkspaceDrag(event) {
+  if (event.button !== 0) return;
+  const id = event.currentTarget.dataset.ws;
+  if (!id || id === 'done') return;
+  suppressWorkspaceClick = false;
+  try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+  wsDragState = {
+    id,
+    element: event.currentTarget,
+    startX: event.clientX,
+    startY: event.clientY,
+    dragging: false,
+  };
+}
+document.addEventListener('pointermove', (event) => {
+  if (!wsDragState) return;
+  const dx = event.clientX - wsDragState.startX;
+  const dy = event.clientY - wsDragState.startY;
+  if (!wsDragState.dragging) {
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+    wsDragState.dragging = true;
+    wsDragState.element.classList.add('dragging');
+  }
+  event.preventDefault();
+
+  const container = document.querySelector('.ws-tabs');
+  if (!container) return;
+  const tabs = [...container.querySelectorAll('.ws-tab')].filter((tab) => tab.dataset.ws !== 'done');
+  const dragged = wsDragState.element;
+  const doneTab = container.querySelector('.ws-tab[data-ws="done"]');
+  let inserted = false;
+  for (const tab of tabs) {
+    if (tab === dragged) continue;
+    const rect = tab.getBoundingClientRect();
+    if (event.clientX < rect.left + rect.width / 2) {
+      if (dragged.previousElementSibling !== tab) container.insertBefore(dragged, tab);
+      inserted = true;
+      break;
+    }
+  }
+  if (!inserted) {
+    const anchor = doneTab || container.querySelector('#ws-add');
+    if (anchor && dragged.nextElementSibling !== anchor) container.insertBefore(dragged, anchor);
+  }
+
+  const rect = container.getBoundingClientRect();
+  if (event.clientX < rect.left + 28) container.scrollLeft -= 10;
+  else if (event.clientX > rect.right - 28) container.scrollLeft += 10;
+});
+async function finishWorkspaceDrag(cancelled = false) {
+  const drag = wsDragState;
+  if (!drag) return;
+  wsDragState = null;
+  drag.element.classList.remove('dragging');
+  if (!drag.dragging) return;
+  suppressWorkspaceClick = true;
+  if (cancelled) {
+    await loadMeta();
+    render();
+    return;
+  }
+  const orderedIds = workspaceIdsFromDom();
+  applyWorkspaceOrderLocally(orderedIds);
+  await persistWorkspaceOrder(orderedIds);
+}
+document.addEventListener('pointerup', () => { void finishWorkspaceDrag(); });
+document.addEventListener('pointercancel', () => { void finishWorkspaceDrag(true); });
 
 async function addWorkspace() {
   const trimmed = await openPrompt('新建工作区', '名称');
@@ -390,25 +517,89 @@ async function handleGroupTool(button) {
   } catch (error) { notify(errorMessage(error, '操作失败')); }
 }
 
-function openTaskDialog(prioId) {
-  state.newTaskTarget = { ws: state.activeWs, prio: prioId || workspacePriorities()[0]?.id || null };
+async function openTaskDialog(prioId, task = null) {
+  state.editingTask = task;
+  state.editingTaskSessions = [];
+  state.editingTaskCurrentMinutes = 0;
+  state.newTaskTarget = task
+    ? { ws: task.workspace_id, prio: task.priority_id }
+    : { ws: state.activeWs, prio: prioId || workspacePriorities()[0]?.id || null };
+  const dialog = document.querySelector('#task-dialog');
   const form = document.querySelector('#task-form');
   form.reset();
-  document.querySelector('#task-dialog').showModal();
+  dialog.querySelector('h2').textContent = task ? '修改任务' : '新任务';
+  dialog.querySelector('#task-ok').textContent = task ? '保存' : '贴上';
+  if (task) {
+    state.editingTaskSessions = await call('list_sessions', { taskId: task.id });
+    state.editingTaskCurrentMinutes = totalSessionMinutes(task, state.editingTaskSessions);
+    form.querySelector('[name="title"]').value = task.title;
+    form.querySelector('[name="estimated"]').value = task.estimated_active_minutes == null
+      ? ''
+      : String(task.estimated_active_minutes / 60);
+    form.querySelector('[name="dueDate"]').value = task.due_date || '';
+    form.querySelector('[name="notes"]').value = task.notes || '';
+    form.querySelector('[name="currentActive"]').textContent = fmtDuration(state.editingTaskCurrentMinutes);
+    form.querySelector('[name="correctedActive"]').value = state.editingTaskCurrentMinutes
+      ? String(Number((state.editingTaskCurrentMinutes / 60).toFixed(2)))
+      : '';
+  } else {
+    form.querySelector('[name="currentActive"]').textContent = fmtDuration(0);
+    form.querySelector('[name="correctedActive"]').value = '';
+  }
+  dialog.showModal();
+  form.querySelector('[name="title"]').focus();
 }
 
 async function submitTask() {
   const form = document.querySelector('#task-form');
   const title = form.querySelector('[name="title"]').value.trim();
   if (!title) { notify('标题不能为空'); return; }
-  const target = state.newTaskTarget || { ws: state.activeWs, prio: workspacePriorities()[0]?.id || null };
+  const input = {
+    title,
+    notes: form.querySelector('[name="notes"]').value.trim() || null,
+    estimatedActiveMinutes: parseEstimatedMinutes(form.querySelector('[name="estimated"]').value),
+    dueDate: form.querySelector('[name="dueDate"]').value || null,
+  };
   try {
+    if (state.editingTask) {
+      const task = state.editingTask;
+      const correctedMinutes = parseEstimatedMinutes(form.querySelector('[name="correctedActive"]').value);
+      const wantsCorrection = correctedMinutes != null && correctedMinutes !== state.editingTaskCurrentMinutes;
+      if (wantsCorrection && correctedMinutes <= 0) {
+        notify('修正后的进行时间必须大于 0');
+        return;
+      }
+      let version = task.version;
+      if (wantsCorrection) {
+        const correctedTask = await call('correct_work_time', {
+          taskId: task.id,
+          expectedVersion: version,
+          targetActiveMinutes: correctedMinutes,
+        });
+        version = correctedTask.version;
+      }
+      await call('update_task', {
+        id: task.id,
+        expectedVersion: version,
+        input: {
+          ...input,
+          reviewNotes: task.review_notes ?? null,
+          workspaceId: task.workspace_id,
+          priorityId: task.priority_id,
+        },
+      });
+      document.querySelector('#task-dialog').close();
+      state.editingTask = null;
+      state.editingTaskSessions = [];
+      state.editingTaskCurrentMinutes = 0;
+      await loadTasks();
+      notify('任务已修改');
+      return;
+    }
+    const target = state.newTaskTarget || { ws: state.activeWs, prio: workspacePriorities()[0]?.id || null };
     await call('create_task', {
       input: {
-        title,
-        notes: form.querySelector('[name="notes"]').value.trim() || null,
-        estimatedActiveMinutes: parseEstimatedMinutes(form.querySelector('[name="estimated"]').value),
-        dueDate: form.querySelector('[name="dueDate"]').value || null,
+        ...input,
         workspaceId: target.ws,
         priorityId: target.prio,
       },
@@ -416,7 +607,7 @@ async function submitTask() {
     document.querySelector('#task-dialog').close();
     await loadTasks();
     notify('任务已添加');
-  } catch (error) { notify(errorMessage(error, '创建任务失败')); }
+  } catch (error) { notify(errorMessage(error, state.editingTask ? '修改任务失败' : '创建任务失败')); }
 }
 
 async function togglePin() {
@@ -517,14 +708,33 @@ async function previewCommand(command, args) {
   if (command === 'list_workspaces') return state.workspaces;
   if (command === 'list_priorities') return state.prios;
   if (command === 'create_workspace') {
-    const ws = { id: crypto.randomUUID(), name: args.name, sort_order: state.workspaces.length, builtin: false, version: 1 };
-    state.workspaces.push(ws);
+    const nextSortOrder = Math.max(-1, ...state.workspaces.filter((workspace) => workspace.id !== 'done').map((workspace) => workspace.sort_order)) + 1;
+    const ws = { id: crypto.randomUUID(), name: args.name, sort_order: nextSortOrder, builtin: false, version: 1 };
+    const doneIndex = state.workspaces.findIndex((workspace) => workspace.id === 'done');
+    if (doneIndex >= 0) state.workspaces.splice(doneIndex, 0, ws);
+    else state.workspaces.push(ws);
     [['P0', '#b0432f'], ['P1', '#b16d42'], ['P2', '#8f9a90']].forEach(([name, color], sortOrder) => {
       state.prios.push({ id: crypto.randomUUID(), workspace_id: ws.id, name, color, sort_order: sortOrder, version: 1 });
     });
     return ws;
   }
   if (command === 'rename_workspace') { const w = state.workspaces.find((x) => x.id === args.id); if (w) { w.name = args.name; w.version += 1; } return w; }
+  if (command === 'reorder_workspaces') {
+    const orderedIds = args.orderedIds || [];
+    const expectedVersions = args.expectedVersions || [];
+    if (orderedIds.length !== expectedVersions.length) throw new Error('工作区排序的 ID 与版本数量不一致');
+    const byId = new Map(state.workspaces.map((workspace) => [workspace.id, workspace]));
+    const movable = state.workspaces.filter((workspace) => workspace.id !== 'done');
+    if (new Set(orderedIds).size !== movable.length || movable.some((workspace) => !orderedIds.includes(workspace.id))) throw new Error('工作区排序必须包含所有普通工作区');
+    orderedIds.forEach((id, index) => {
+      const workspace = byId.get(id);
+      if (!workspace || workspace.id === 'done' || workspace.version !== expectedVersions[index]) throw new Error(workspace?.version !== expectedVersions[index] ? '版本冲突，请刷新后重试' : '工作区不存在');
+      workspace.sort_order = index;
+      workspace.version += 1;
+    });
+    state.workspaces = [...orderedIds.map((id) => byId.get(id)), ...state.workspaces.filter((workspace) => workspace.id === 'done')];
+    return state.workspaces;
+  }
   if (command === 'delete_workspace') {
     if (state.tasks.some((t) => t.workspace_id === args.id)) throw new Error('工作区还有任务，先移走再删除');
     state.workspaces = state.workspaces.filter((w) => w.id !== args.id);
@@ -548,11 +758,67 @@ async function previewCommand(command, args) {
     state.tasks.unshift(task);
     return task;
   }
+  if (command === 'update_task') {
+    const task = state.tasks.find((item) => item.id === args.id);
+    if (!task) throw new Error('任务不存在');
+    if (task.version !== args.expectedVersion) throw new Error('版本冲突，请刷新后重试');
+    Object.assign(task, {
+      title: args.input.title,
+      notes: args.input.notes,
+      review_notes: args.input.reviewNotes,
+      estimated_active_minutes: args.input.estimatedActiveMinutes,
+      due_date: args.input.dueDate || null,
+      workspace_id: args.input.workspaceId,
+      priority_id: args.input.priorityId,
+      updated_at: new Date().toISOString(),
+      version: task.version + 1,
+    });
+    return task;
+  }
   if (command === 'complete_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { if (task.activeSession) task.activeSession.ended_at = new Date().toISOString(); task.status = 'completed'; task.completed_at = new Date().toISOString(); task.version += 1; task.updated_at = task.completed_at; task.workspace_id = 'done'; delete task.activeSession; } }
   if (command === 'reopen_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { task.status = 'pending'; task.completed_at = null; task.version += 1; task.workspace_id = task.home_workspace_id || 'daily'; } }
   if (command === 'pause_task') { const task = state.tasks.find((item) => item.id === args.id); if (task) { if (task.activeSession) task.activeSession.ended_at = new Date().toISOString(); task.status = 'pending'; task.version += 1; task.updated_at = new Date().toISOString(); delete task.activeSession; } }
   if (command === 'finish_work') { for (const task of state.tasks) { const session = (task.sessions || []).find((item) => item.id === args.sessionId); if (session) session.ended_at = new Date().toISOString(); if (task.activeSession?.id === args.sessionId) delete task.activeSession; } }
   if (command === 'list_sessions') { const task = state.tasks.find((item) => item.id === args.taskId); return task ? [...(task.sessions || [])] : []; }
+  if (command === 'correct_work_time') {
+    const task = state.tasks.find((item) => item.id === args.taskId);
+    if (!task) throw new Error('任务不存在');
+    if (task.version !== args.expectedVersion) throw new Error('版本冲突，请刷新后重试');
+    if (!Number.isFinite(args.targetActiveMinutes) || args.targetActiveMinutes <= 0) throw new Error('目标进行时长必须大于 0 分钟');
+    const upperMs = task.completed_at
+      ? Date.parse(task.completed_at)
+      : task.activeBlock?.started_at
+        ? Date.parse(task.activeBlock.started_at)
+        : Date.now();
+    if (!Number.isFinite(upperMs)) throw new Error('时间格式无效');
+    const startMs = upperMs - args.targetActiveMinutes * 60000;
+    const startedAt = new Date(startMs).toISOString();
+    const endedAt = new Date(upperMs).toISOString();
+    task.sessions = [{
+      id: crypto.randomUUID(),
+      task_id: task.id,
+      started_at: startedAt,
+      ended_at: endedAt,
+      note: null,
+      created_at: endedAt,
+    }];
+    if (task.status === 'in_progress' && !task.is_blocked) {
+      task.sessions.push({
+        id: crypto.randomUUID(),
+        task_id: task.id,
+        started_at: endedAt,
+        ended_at: null,
+        note: null,
+        created_at: endedAt,
+      });
+      task.activeSession = task.sessions[task.sessions.length - 1];
+    } else {
+      delete task.activeSession;
+    }
+    task.version += 1;
+    task.updated_at = new Date().toISOString();
+    return task;
+  }
   if (command === 'delete_task') state.tasks = state.tasks.filter((item) => item.id !== args.id);
   if (command === 'start_work') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.status = 'in_progress'; task.version += 1; task.sessions = task.sessions || []; task.activeSession = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null }; task.sessions.push(task.activeSession); } }
   if (command === 'open_web_console') throw new Error('Web 设置仅桌面端可用');
@@ -562,8 +828,8 @@ async function previewCommand(command, args) {
 }
 function seedPreviewMeta() {
   state.workspaces = [
-    { id: 'daily', name: '日常', sort_order: 0, builtin: true, version: 1 },
-    { id: 'work', name: '工作', sort_order: 1, builtin: true, version: 1 },
+    { id: 'daily', name: '日常', sort_order: 0, builtin: false, version: 1 },
+    { id: 'work', name: '工作', sort_order: 1, builtin: false, version: 1 },
     { id: 'done', name: '已完成', sort_order: 99, builtin: true, version: 1 },
   ];
   state.prios = [
@@ -583,6 +849,7 @@ async function loadMeta() {
   } else if (!state.workspaces.length) {
     seedPreviewMeta();
   }
+  state.workspaces.sort((a, b) => Number(a.id === 'done') - Number(b.id === 'done') || a.sort_order - b.sort_order);
   if (!state.activeWs) state.activeWs = state.workspaces[0]?.id || null;
 }
 
@@ -640,6 +907,11 @@ function openPrompt(title, label, value = '') {
     input.focus();
   });
 }
+function submitPrompt() {
+  const value = document.querySelector('#prompt-input').value.trim();
+  document.querySelector('#prompt-dialog').close();
+  if (promptResolve) { promptResolve(value || null); promptResolve = null; }
+}
 function openConfirm(title) {
   return new Promise((resolve) => {
     confirmResolve = resolve;
@@ -647,11 +919,14 @@ function openConfirm(title) {
     document.querySelector('#confirm-dialog').showModal();
   });
 }
+document.addEventListener('submit', (e) => {
+  if (!e.target.closest('#prompt-dialog')) return;
+  e.preventDefault();
+  submitPrompt();
+});
 document.addEventListener('click', (e) => {
   if (e.target.closest('#prompt-ok')) {
-    const v = document.querySelector('#prompt-input').value.trim();
-    document.querySelector('#prompt-dialog').close();
-    if (promptResolve) { promptResolve(v || null); promptResolve = null; }
+    submitPrompt();
     return;
   }
   if (e.target.closest('#prompt-dialog [data-close]')) {
@@ -683,7 +958,7 @@ function openContextMenu(x, y, taskId, version) {
   closeContextMenu();
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
-  menu.innerHTML = `<button type="button" data-ctx="delete">🗑 删除任务</button>`;
+  menu.innerHTML = `<button type="button" data-ctx="edit">✎ 修改任务</button><button type="button" data-ctx="delete">🗑 删除任务</button>`;
   document.body.appendChild(menu);
   menu.style.left = `${Math.min(x, window.innerWidth - menu.offsetWidth - 6)}px`;
   menu.style.top = `${Math.min(y, window.innerHeight - menu.offsetHeight - 6)}px`;
@@ -691,6 +966,11 @@ function openContextMenu(x, y, taskId, version) {
     const btn = e.target.closest('[data-ctx]');
     if (!btn) return;
     closeContextMenu();
+    if (btn.dataset.ctx === 'edit') {
+      const task = state.tasks.find((item) => item.id === taskId);
+      if (task) openTaskDialog(null, task);
+      return;
+    }
     if (btn.dataset.ctx === 'delete') await deleteTask(taskId, version);
   });
   ctxMenu = menu;
@@ -839,13 +1119,16 @@ async function updateMouseInside() {
       && cursor.x < position.x + titleBar.right * scale
       && cursor.y >= position.y + titleBar.top * scale
       && cursor.y < position.y + titleBar.bottom * scale);
+    const expandedBefore = zeroOpacityExpanded;
     if (unfocusedOpacity === 0) {
       if (!inside) zeroOpacityExpanded = false;
       else if (inTitleBar) zeroOpacityExpanded = true;
     } else {
       zeroOpacityExpanded = false;
     }
-    if (inside !== mouseInside || inTitleBar !== mouseInTitleBar) {
+    if (expandedBefore !== zeroOpacityExpanded
+      || inside !== mouseInside
+      || inTitleBar !== mouseInTitleBar) {
       mouseInside = inside;
       mouseInTitleBar = inTitleBar;
       applyContentOpacity();
@@ -853,7 +1136,7 @@ async function updateMouseInside() {
   } catch {}
 }
 
-setInterval(updateMouseInside, 100);
+setInterval(updateMouseInside, 33);
 updateMouseInside();
 
 // ===== 自绘拖拽（跨平台，避免 macOS 边缘半屏吸附） =====

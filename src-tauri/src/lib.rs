@@ -50,7 +50,8 @@ fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 mod commands {
     use super::AppState;
     use cardhannis_core::{
-        BlockTaskCommand, CreateTaskCommand, Priority, Task, TaskBlock, WorkSession, Workspace,
+        BlockTaskCommand, CreateTaskCommand, Priority, Task, TaskBlock, UpdateTaskCommand,
+        WorkSession, Workspace,
     };
     use tauri::State;
 
@@ -104,6 +105,48 @@ mod commands {
             .map_err(error_message)
     }
 
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct UpdateTaskInput {
+        pub title: String,
+        pub notes: Option<String>,
+        pub review_notes: Option<String>,
+        pub estimated_active_minutes: Option<i64>,
+        pub due_date: Option<String>,
+        pub workspace_id: Option<String>,
+        pub priority_id: Option<String>,
+    }
+
+    #[tauri::command]
+    pub fn update_task(
+        state: State<'_, AppState>,
+        id: String,
+        expected_version: i64,
+        input: UpdateTaskInput,
+    ) -> Result<Task, String> {
+        let service = service(&state)?;
+        let existing = service
+            .get(&id)
+            .map_err(error_message)?
+            .ok_or_else(|| "任务不存在".to_string())?;
+        service
+            .update(
+                &id,
+                expected_version,
+                UpdateTaskCommand {
+                    title: input.title,
+                    notes: input.notes,
+                    review_notes: input.review_notes,
+                    estimated_active_minutes: input.estimated_active_minutes,
+                    due_date: input.due_date,
+                    sort_order: existing.sort_order,
+                    workspace_id: input.workspace_id,
+                    priority_id: input.priority_id,
+                },
+            )
+            .map_err(error_message)
+    }
+
     #[tauri::command]
     pub fn complete_task(
         state: State<'_, AppState>,
@@ -140,6 +183,18 @@ mod commands {
     ) -> Result<WorkSession, String> {
         service(&state)?
             .finish_work(&session_id)
+            .map_err(error_message)
+    }
+
+    #[tauri::command]
+    pub fn correct_work_time(
+        state: State<'_, AppState>,
+        task_id: String,
+        expected_version: i64,
+        target_active_minutes: i64,
+    ) -> Result<Task, String> {
+        service(&state)?
+            .correct_work_time(&task_id, expected_version, target_active_minutes)
             .map_err(error_message)
     }
 
@@ -230,6 +285,17 @@ mod commands {
     ) -> Result<(), String> {
         service(&state)?
             .delete_workspace(&id, expected_version)
+            .map_err(error_message)
+    }
+
+    #[tauri::command]
+    pub fn reorder_workspaces(
+        state: State<'_, AppState>,
+        ordered_ids: Vec<String>,
+        expected_versions: Vec<i64>,
+    ) -> Result<Vec<Workspace>, String> {
+        service(&state)?
+            .reorder_workspaces(&ordered_ids, &expected_versions)
             .map_err(error_message)
     }
 
@@ -353,6 +419,7 @@ pub fn run() {
             commands::list_tasks,
             commands::open_web_console,
             commands::create_task,
+            commands::update_task,
             commands::complete_task,
             commands::delete_task,
             commands::pause_task,
@@ -360,6 +427,7 @@ pub fn run() {
             commands::reopen_task,
             commands::start_work,
             commands::finish_work,
+            commands::correct_work_time,
             commands::list_blocks,
             commands::block_task,
             commands::unblock_task,
@@ -367,6 +435,7 @@ pub fn run() {
             commands::create_workspace,
             commands::rename_workspace,
             commands::delete_workspace,
+            commands::reorder_workspaces,
             commands::list_priorities,
             commands::create_priority,
             commands::update_priority,
