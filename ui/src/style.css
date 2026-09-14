@@ -52,6 +52,7 @@ html.content-hidden .win-bar { border-bottom-color: transparent; border-radius: 
 
 /* 标题条（可拖动） */
 .win-bar { display: flex; align-items: center; gap: 8px; padding: 8px 7px 8px 11px; border-bottom: 1px solid rgba(21, 46, 37, .32); background: linear-gradient(180deg, #376052 0%, var(--green) 62%, var(--green-deep) 100%); color: #f2f6f1; user-select: none; -webkit-user-select: none; flex: none; cursor: grab; }
+.win-bar:active { cursor: grabbing; }
 .win-brand { font-size: 13px; font-weight: 780; letter-spacing: .015em; text-shadow: 0 1px 1px rgba(12, 29, 23, .2); }
 .win-tools { margin-left: auto; display: flex; gap: 3px; }
 .win-tools button { width: 24px; height: 24px; padding: 0; border: 1px solid rgba(255, 255, 255, .06); border-radius: 7px; background: rgba(255, 255, 255, .08); color: #dfe9e1; font-size: calc(14px + var(--ui-font-delta)); line-height: 1; }

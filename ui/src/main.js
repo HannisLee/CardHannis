@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
-import { cursorPosition, getCurrentWindow } from '@tauri-apps/api/window';
-import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { LogicalSize } from '@tauri-apps/api/dpi';
 import './style.css';
 
 const app = document.querySelector('#app');
@@ -31,6 +31,8 @@ let alwaysShowContent = localStorage.getItem(ALWAYS_SHOW_CONTENT_KEY) === '1';
 let mouseInside = false;
 let mouseInTitleBar = false;
 let taskDialogOriginalSize = null;
+let initialDataLoaded = false;
+let lastSyncedAtSeen = null;
 const TASK_DIALOG_WINDOW_HEIGHT = 440;
 let zeroOpacityExpanded = false;
 function normalizeOpacity(value) {
@@ -43,14 +45,6 @@ function applyContentOpacity() {
   const opacity = expanded ? 100 : unfocusedOpacity;
   document.documentElement.style.setProperty('--content-opacity', (opacity / 100).toFixed(2));
   document.documentElement.classList.toggle('content-hidden', opacity === 0);
-}
-let mousePositionUpdateHandle = 0;
-function scheduleMousePositionUpdate() {
-  if (mousePositionUpdateHandle) return;
-  mousePositionUpdateHandle = requestAnimationFrame(() => {
-    mousePositionUpdateHandle = 0;
-    void updateMouseInside();
-  });
 }
 let collapsed = {};
 try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch {}
@@ -334,28 +328,6 @@ function render() {
 
   unfocusedOpacity = opacity;
   applyContentOpacity();
-  document.querySelector('.win')?.addEventListener('mouseenter', () => {
-    mouseInside = true;
-    if (unfocusedOpacity !== 0) applyContentOpacity();
-  });
-  document.querySelector('.win')?.addEventListener('mouseleave', () => {
-    mouseInside = false;
-    mouseInTitleBar = false;
-    // 0% 时的唤醒状态只能由全局鼠标位置确认“确实离开窗口”后清除。
-    // 重绘/右键菜单会让 DOM mouseleave 触发，但鼠标仍可能在窗口内。
-    if (unfocusedOpacity === 0) scheduleMousePositionUpdate();
-    else applyContentOpacity();
-  });
-  document.querySelector('.win-bar')?.addEventListener('mouseenter', () => {
-    mouseInside = true;
-    mouseInTitleBar = true;
-    if (unfocusedOpacity === 0) zeroOpacityExpanded = true;
-    applyContentOpacity();
-  });
-  document.querySelector('.win-bar')?.addEventListener('mouseleave', () => {
-    mouseInTitleBar = false;
-    if (unfocusedOpacity === 0) scheduleMousePositionUpdate();
-  });
   document.querySelector('#btn-content-mode')?.addEventListener('click', () => {
     alwaysShowContent = !alwaysShowContent;
     localStorage.setItem(ALWAYS_SHOW_CONTENT_KEY, alwaysShowContent ? '1' : '0');
@@ -985,8 +957,23 @@ async function loadTasks() {
 async function loadSyncStatus() {
   if (!isTauri()) return;
   try {
+    const previousSyncedAt = state.syncStatus?.last_synced_at;
     state.syncStatus = await call('sync_status');
     updateSyncStatusUi();
+
+    // 自动/手动同步会直接更新 SQLite；轮询到新的完成时间后刷新界面，
+    // 避免启动时先渲染旧数据、同步完成后仍停留在旧列表。
+    const syncedAt = state.syncStatus?.last_synced_at;
+    if (
+      initialDataLoaded
+      && syncedAt
+      && syncedAt !== previousSyncedAt
+      && syncedAt !== lastSyncedAtSeen
+      && !document.querySelector('dialog[open]')
+    ) {
+      lastSyncedAtSeen = syncedAt;
+      await Promise.all([loadMeta(), loadTasks()]);
+    }
   } catch {}
 }
 
@@ -1225,49 +1212,44 @@ document.addEventListener('click', (e) => {
   if (closer) closer.closest('dialog')?.close();
 });
 
-// ===== 全局鼠标位置驱动的便签透明度 =====
-async function updateMouseInside() {
-  const w = theWindow();
-  if (!w) return;
-  try {
-    const [cursor, position, size, scale] = await Promise.all([
-      cursorPosition(),
-      w.outerPosition(),
-      w.outerSize(),
-      w.scaleFactor(),
-    ]);
-    const inside = cursor.x >= position.x
-      && cursor.x < position.x + size.width
-      && cursor.y >= position.y
-      && cursor.y < position.y + size.height;
-    const titleBar = document.querySelector('.win-bar')?.getBoundingClientRect();
-    const inTitleBar = Boolean(inside && titleBar
-      && cursor.x >= position.x + titleBar.left * scale
-      && cursor.x < position.x + titleBar.right * scale
-      && cursor.y >= position.y + titleBar.top * scale
-      && cursor.y < position.y + titleBar.bottom * scale);
-    const expandedBefore = zeroOpacityExpanded;
-    if (unfocusedOpacity === 0) {
-      if (!inside) zeroOpacityExpanded = false;
-      else if (inTitleBar) zeroOpacityExpanded = true;
-    } else {
-      zeroOpacityExpanded = false;
-    }
-    if (expandedBefore !== zeroOpacityExpanded
-      || inside !== mouseInside
-      || inTitleBar !== mouseInTitleBar) {
-      mouseInside = inside;
-      mouseInTitleBar = inTitleBar;
-      applyContentOpacity();
-    }
-  } catch {}
+// ===== 鼠标位置驱动的便签透明度 =====
+// 混合缩放多屏幕下，Tauri cursorPosition/outerPosition 的全局物理坐标不可靠。
+// 这里使用 WebView 自身的 clientX/clientY，坐标体系始终和标题栏/窗口一致。
+let mousePoint = { x: -1, y: -1 };
+function updateMouseInside(x = mousePoint.x, y = mousePoint.y) {
+  const inside = x >= 0 && y >= 0 && x < window.innerWidth && y < window.innerHeight;
+  const titleBar = document.querySelector('.win-bar')?.getBoundingClientRect();
+  const inTitleBar = Boolean(inside && titleBar
+    && x >= titleBar.left && x < titleBar.right
+    && y >= titleBar.top && y < titleBar.bottom);
+  if (unfocusedOpacity === 0) {
+    if (!inside) zeroOpacityExpanded = false;
+    else if (inTitleBar) zeroOpacityExpanded = true;
+  } else {
+    zeroOpacityExpanded = false;
+  }
+  mouseInside = inside;
+  mouseInTitleBar = inTitleBar;
+  applyContentOpacity();
 }
+document.addEventListener('mousemove', (e) => {
+  mousePoint = { x: e.clientX, y: e.clientY };
+  updateMouseInside();
+});
+document.addEventListener('mouseleave', () => {
+  mousePoint = { x: -1, y: -1 };
+  updateMouseInside();
+});
+document.addEventListener('mouseout', (e) => {
+  if (!e.relatedTarget) {
+    mousePoint = { x: -1, y: -1 };
+    updateMouseInside();
+  }
+});
 
-setInterval(updateMouseInside, 33);
-updateMouseInside();
-
-// ===== 自绘拖拽（跨平台，避免 macOS 边缘半屏吸附） =====
-let dragState = null;
+// ===== 标题栏拖动 =====
+// 使用系统原生拖动：多屏幕、不同缩放比例和全局坐标均由窗口系统处理，
+// 避免 WKWebView 的 event.screenX/Y 与 Tauri 物理/逻辑坐标混算导致窗口跳丢。
 document.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
   const bar = e.target.closest('.win-bar');
@@ -1275,23 +1257,7 @@ document.addEventListener('mousedown', (e) => {
   const w = theWindow();
   if (!w) return;
   e.preventDefault();
-  Promise.all([w.outerPosition(), w.scaleFactor()]).then(([pos, scale]) => {
-    const logical = pos.toLogical(scale);
-    dragState = { sx: e.screenX, sy: e.screenY, px: logical.x, py: logical.y };
-  }).catch(() => {});
-});
-document.addEventListener('mousemove', (e) => {
-  if (!dragState) return;
-  const w = theWindow();
-  if (!w) return;
-  w.setPosition(new LogicalPosition(
-    dragState.px + (e.screenX - dragState.sx),
-    dragState.py + (e.screenY - dragState.sy),
-  )).catch(() => {});
-});
-document.addEventListener('mouseup', () => {
-  if (!dragState) return;
-  dragState = null;
+  void w.startDragging();
 });
 
 function notify(message) {
@@ -1304,6 +1270,7 @@ function notify(message) {
 }
 
 render();
+updateMouseInside();
 void loadSystemFonts();
 (async () => {
   const w = theWindow();
@@ -1311,6 +1278,10 @@ void loadSystemFonts();
     try { pinned = await w.isAlwaysOnTop(); } catch {}
   }
   await Promise.all([loadMeta(), loadTasks(), loadSyncStatus()]);
+  // 启动同步与首次渲染并发执行；再读一次数据，确保拿到同步完成后的最终状态。
+  await Promise.all([loadMeta(), loadTasks()]);
+  initialDataLoaded = true;
+  lastSyncedAtSeen = state.syncStatus?.last_synced_at || null;
 })();
 
 setInterval(loadSyncStatus, 5000);
