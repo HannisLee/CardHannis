@@ -13,6 +13,46 @@ pub struct AppState {
     pub tray: tauri::tray::TrayIcon,
 }
 
+fn create_tray_icon() -> tauri::image::Image<'static> {
+    let image = tauri::include_image!("icons/128x128.png");
+    let width = image.width() as usize;
+    let height = image.height() as usize;
+    let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+    for (index, pixel) in image.rgba().chunks_exact(4).enumerate() {
+        // 忽略几乎透明的边缘，让图案充分占用系统固定的托盘区域。
+        if pixel[3] <= 16 {
+            continue;
+        }
+        let (x, y) = (index % width, index / width);
+        left = left.min(x);
+        top = top.min(y);
+        right = right.max(x);
+        bottom = bottom.max(y);
+    }
+    if left > right || top > bottom {
+        return image;
+    }
+
+    // 保留少量边缘和方形画布，避免裁掉抗锯齿或改变图案比例。
+    left = left.saturating_sub(2);
+    top = top.saturating_sub(2);
+    right = (right + 2).min(width - 1);
+    bottom = (bottom + 2).min(height - 1);
+    let crop_width = right - left + 1;
+    let crop_height = bottom - top + 1;
+    let size = crop_width.max(crop_height);
+    let offset_x = (size - crop_width) / 2;
+    let offset_y = (size - crop_height) / 2;
+    let mut rgba = vec![0; size * size * 4];
+    for y in 0..crop_height {
+        let source = ((top + y) * width + left) * 4;
+        let target = ((offset_y + y) * size + offset_x) * 4;
+        rgba[target..target + crop_width * 4]
+            .copy_from_slice(&image.rgba()[source..source + crop_width * 4]);
+    }
+    tauri::image::Image::new_owned(rgba, size as u32, size as u32)
+}
+
 /// 桌面端与 Web 原型共用的数据目录。
 /// macOS: ~/Library/Application Support/CardHannis
 /// Windows: %APPDATA%/CardHannis
@@ -446,14 +486,9 @@ pub fn run() {
                 MenuItem::with_id(app, "toggle-window", "显示 / 隐藏窗口", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出 CardHannis", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&toggle_item, &quit_item])?;
-            let tray_icon = app
-                .handle()
-                .default_window_icon()
-                .expect("缺少应用图标")
-                .clone();
             let tray = TrayIconBuilder::with_id("main")
-                .icon(tray_icon)
-                .icon_as_template(cfg!(target_os = "macos"))
+                .icon(create_tray_icon())
+                .icon_as_template(false)
                 .tooltip("CardHannis")
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)

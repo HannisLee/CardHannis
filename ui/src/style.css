@@ -147,8 +147,8 @@ dialog::backdrop { background: rgba(40, 46, 38, .3); backdrop-filter: blur(2px);
 .ws-tabs { display: flex; gap: 3px; overflow-x: auto; flex: 1; scrollbar-width: none; }
 .ws-tabs::-webkit-scrollbar { display: none; }
 .ws-tab { flex: none; display: inline-flex; align-items: center; gap: 3px; border: 1px solid rgba(112, 109, 88, .22); border-radius: 6px; padding: 2px 6px; background: rgba(255, 255, 255, .18); font-size: calc(12px + var(--ui-font-delta)); font-weight: 700; line-height: 1.15; color: #71796c; }
-.ws-tab:not([data-ws="done"]) { cursor: grab; touch-action: none; }
-.ws-tab.dragging { opacity: .68; cursor: grabbing; transform: translateY(1px); }
+.ws-tab:not([data-ws="done"]) { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.ws-tab.dragging { opacity: .68; cursor: grabbing; transform: translateY(1px); outline: 1px solid var(--green); }
 .ws-tab b { min-width: 10px; font-size: calc(10.5px + var(--ui-font-delta)); font-weight: 800; color: #9b9a88; text-align: center; }
 .ws-tab:hover { background: rgba(60, 104, 87, .08); }
 .ws-tab.active { background: var(--green); border-color: var(--green); box-shadow: 0 1px 2px rgba(37, 69, 57, .18), inset 0 1px 0 rgba(255, 255, 255, .1); color: #f2f5f1; }
@@ -194,7 +194,7 @@ dialog::backdrop { background: rgba(40, 46, 38, .3); backdrop-filter: blur(2px);
 .win-tools button svg { width: 14px; height: 14px; display: block; }
 .win-tools button { display: grid; place-items: center; }
 .win-brand { display: inline-flex; align-items: center; gap: 6px; }
-.win-brand svg { width: 14px; height: 14px; }
+.win-brand .app-icon { width: 24px; height: 24px; display: block; flex: none; object-fit: contain; }
 
 /* 已完成行元信息 */
 .done-meta { flex: none; max-width: 128px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: ui-monospace, Menlo, monospace; font-size: calc(10px + var(--ui-font-delta)); letter-spacing: .01em; color: #94978e; }

@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "icons:build": "tauri icon icon/图标.png --output src-tauri/icons",
     "ui:dev": "npm --prefix ui run dev",
     "ui:build": "npm --prefix ui run build",
     "tauri:dev": "tauri dev",

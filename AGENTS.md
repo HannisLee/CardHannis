@@ -117,6 +117,7 @@ cargo check --workspace
 
 # 前端依赖和构建
 npm install
+npm run icons:build  # 从 icon/图标.png 生成桌面、托盘、安装包及 Web 设置页图标
 npm run ui:dev       # Vite，固定 http://127.0.0.1:1420（ui/vite.config.js 中与 Tauri devUrl 一致）
 npm run ui:build
 

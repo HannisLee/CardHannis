@@ -11,7 +11,7 @@ use std::{
 use axum::{
     Json, Router,
     extract::State,
-    http::StatusCode,
+    http::{StatusCode, header},
     response::Html,
     routing::{get, post},
 };
@@ -457,6 +457,8 @@ impl WebConsoleState {
         let state = self.clone();
         let router = Router::new()
             .route("/", get(index))
+            .route("/icon.png", get(app_icon))
+            .route("/favicon.ico", get(favicon))
             .route("/api/status", get(status))
             .route(
                 "/api/settings/supabase",
@@ -498,6 +500,26 @@ impl WebConsoleState {
 async fn index(State(state): State<Arc<WebConsoleState>>) -> Html<&'static str> {
     state.touch();
     Html(WEB_PAGE)
+}
+
+async fn app_icon(
+    State(state): State<Arc<WebConsoleState>>,
+) -> ([(header::HeaderName, &'static str); 1], &'static [u8]) {
+    state.touch();
+    (
+        [(header::CONTENT_TYPE, "image/png")],
+        include_bytes!("../icons/128x128.png"),
+    )
+}
+
+async fn favicon(
+    State(state): State<Arc<WebConsoleState>>,
+) -> ([(header::HeaderName, &'static str); 1], &'static [u8]) {
+    state.touch();
+    (
+        [(header::CONTENT_TYPE, "image/x-icon")],
+        include_bytes!("../icons/icon.ico"),
+    )
 }
 
 async fn status(State(state): State<Arc<WebConsoleState>>) -> Json<serde_json::Value> {
@@ -922,13 +944,16 @@ const WEB_PAGE: &str = r##"<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/png" href="/icon.png" />
+<link rel="apple-touch-icon" href="/icon.png" />
 <title>CardHannis Web 设置</title>
 <style>
 :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif; }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; background: #f5f2e9; color: #33403a; }
 header { padding: 28px 32px 20px; background: #325549; color: #f2f6ef; }
-header h1 { margin: 0 0 6px; font-size: 22px; }
+header h1 { margin: 0 0 6px; font-size: 22px; display: flex; align-items: center; gap: 10px; }
+header .app-icon { width: 36px; height: 36px; flex: none; object-fit: contain; }
 header p { margin: 0; opacity: .78; font-size: 13px; }
 main { max-width: 760px; margin: 0 auto; padding: 26px 24px 78px; display: grid; gap: 16px; }
 .card { border-radius: 14px; background: #fffdf6; box-shadow: 0 10px 28px rgba(45,52,44,.1), inset 0 0 0 1px rgba(122,112,82,.15); padding: 18px 20px; }
@@ -964,7 +989,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 </head>
 <body>
 <header>
-  <h1>CardHannis Web 设置</h1>
+  <h1><img class="app-icon" src="/icon.png" alt="" aria-hidden="true" />CardHannis Web 设置</h1>
   <p>个人设置控制台 · 默认关闭 · 5 分钟无操作自动关闭</p>
 </header>
 <main>

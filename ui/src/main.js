@@ -1,7 +1,16 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LogicalSize } from '@tauri-apps/api/dpi';
+import appIconUrl from '../../icon/图标.png';
 import './style.css';
+
+for (const rel of ['icon', 'apple-touch-icon']) {
+  const link = document.createElement('link');
+  link.rel = rel;
+  link.type = 'image/png';
+  link.href = appIconUrl;
+  document.head.append(link);
+}
 
 const app = document.querySelector('#app');
 const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, finishedSessionMinutesByTask: {}, sessionMinutesByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null, unblockingTaskId: null, editingTask: null, editingTaskSessions: [], editingTaskCurrentMinutes: 0, syncStatus: null };
@@ -50,7 +59,7 @@ let collapsed = {};
 try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch {}
 let pinned = true;
 const ICONS = {
-  logo: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><g transform="translate(32 0)"><path fill="currentColor" d="M48 32C21.5 32 0 53.5 0 80v352c0 26.5 21.5 48 48 48h352c26.5 0 48-21.5 48-48V80c0-26.5-21.5-48-48-48zm16 64h106.668v53.334h-53.334v213.332H224V416H64zm160 0h160v320H277.332v-53.334h53.334V149.334H224z"/></g></svg>',
+  logo: `<img class="app-icon" src="${appIconUrl}" alt="" aria-hidden="true" draggable="false" />`,
   start: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M6 18V6h2v12zm4 0l10-6l-10-6z"/></svg>',
   pause: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M9 3a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm8 0a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/></svg>',
   done: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m9 10l3.258 2.444a1 1 0 0 0 1.353-.142L20 5"/><path d="M21 12a9 9 0 1 1-6.67-8.693"/></g></svg>',
@@ -239,7 +248,7 @@ function render() {
     <nav class="ws-row">
       <div class="ws-tabs">${state.workspaces.map((w) => {
         const open = w.id === 'done' ? state.tasks.filter((t) => t.workspace_id === w.id).length : state.tasks.filter((t) => t.workspace_id === w.id && t.status !== 'completed').length;
-        return `<button class="ws-tab ${w.id === state.activeWs ? 'active' : ''}" data-ws="${w.id}" type="button">${escapeHtml(w.name)}<b>${open}</b></button>`;
+        return `<button class="ws-tab ${w.id === state.activeWs ? 'active' : ''}" data-ws="${w.id}" title="${w.id === 'done' ? '已完成任务，固定在最后' : '按住拖动调整顺序，右键管理工作区'}" type="button">${escapeHtml(w.name)}<b>${open}</b></button>`;
       }).join('')}<button class="ws-tool" id="ws-add" title="新建工作区" type="button">＋</button></div>
     </nav>
     <div class="win-body">
@@ -394,17 +403,11 @@ function render() {
 
 let wsDragState = null;
 let suppressWorkspaceClick = false;
+let workspaceOrderSaving = false;
 function workspaceIdsFromDom() {
   return [...document.querySelectorAll('.ws-tabs .ws-tab')]
     .map((tab) => tab.dataset.ws)
     .filter((id) => id && id !== 'done');
-}
-function applyWorkspaceOrderLocally(orderedIds) {
-  const byId = new Map(state.workspaces.map((workspace) => [workspace.id, workspace]));
-  state.workspaces = [
-    ...orderedIds.map((id) => byId.get(id)).filter(Boolean),
-    ...state.workspaces.filter((workspace) => workspace.id === 'done'),
-  ];
 }
 async function persistWorkspaceOrder(orderedIds) {
   const currentIds = state.workspaces
@@ -416,7 +419,12 @@ async function persistWorkspaceOrder(orderedIds) {
   }
   const byId = new Map(state.workspaces.map((workspace) => [workspace.id, workspace]));
   const expectedVersions = orderedIds.map((id) => byId.get(id)?.version);
-  if (expectedVersions.some((version) => version == null)) return;
+  if (expectedVersions.some((version) => version == null)) {
+    render();
+    notify('工作区数据已变动，请刷新后重试');
+    return;
+  }
+  workspaceOrderSaving = true;
   try {
     state.workspaces = await call('reorder_workspaces', {
       orderedIds,
@@ -425,13 +433,17 @@ async function persistWorkspaceOrder(orderedIds) {
     render();
     notify('工作区顺序已更新');
   } catch (error) {
-    await loadMeta();
+    let message = errorMessage(error, '工作区排序失败');
+    try { await loadMeta(); }
+    catch (refreshError) { message += `；${errorMessage(refreshError, '刷新工作区失败')}`; }
     render();
-    notify(errorMessage(error, '工作区排序失败'));
+    notify(message);
+  } finally {
+    workspaceOrderSaving = false;
   }
 }
 function startWorkspaceDrag(event) {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || wsDragState || workspaceOrderSaving) return;
   const id = event.currentTarget.dataset.ws;
   if (!id || id === 'done') return;
   suppressWorkspaceClick = false;
@@ -439,13 +451,14 @@ function startWorkspaceDrag(event) {
   wsDragState = {
     id,
     element: event.currentTarget,
+    pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
     dragging: false,
   };
 }
 document.addEventListener('pointermove', (event) => {
-  if (!wsDragState) return;
+  if (!wsDragState || event.pointerId !== wsDragState.pointerId) return;
   const dx = event.clientX - wsDragState.startX;
   const dy = event.clientY - wsDragState.startY;
   if (!wsDragState.dragging) {
@@ -465,7 +478,7 @@ document.addEventListener('pointermove', (event) => {
     if (tab === dragged) continue;
     const rect = tab.getBoundingClientRect();
     if (event.clientX < rect.left + rect.width / 2) {
-      if (dragged.previousElementSibling !== tab) container.insertBefore(dragged, tab);
+      if (dragged.nextElementSibling !== tab) container.insertBefore(dragged, tab);
       inserted = true;
       break;
     }
@@ -475,6 +488,10 @@ document.addEventListener('pointermove', (event) => {
     if (anchor && dragged.nextElementSibling !== anchor) container.insertBefore(dragged, anchor);
   }
 
+  // 移动 DOM 节点可能丢失指针捕获，重新捕获以便拖出标签后仍能松开。
+  try {
+    if (!dragged.hasPointerCapture(event.pointerId)) dragged.setPointerCapture(event.pointerId);
+  } catch {}
   const rect = container.getBoundingClientRect();
   if (event.clientX < rect.left + 28) container.scrollLeft -= 10;
   else if (event.clientX > rect.right - 28) container.scrollLeft += 10;
@@ -483,20 +500,25 @@ async function finishWorkspaceDrag(cancelled = false) {
   const drag = wsDragState;
   if (!drag) return;
   wsDragState = null;
+  try { drag.element.releasePointerCapture(drag.pointerId); } catch {}
   drag.element.classList.remove('dragging');
   if (!drag.dragging) return;
   suppressWorkspaceClick = true;
+  setTimeout(() => { suppressWorkspaceClick = false; }, 0);
   if (cancelled) {
-    await loadMeta();
     render();
     return;
   }
   const orderedIds = workspaceIdsFromDom();
-  applyWorkspaceOrderLocally(orderedIds);
   await persistWorkspaceOrder(orderedIds);
 }
-document.addEventListener('pointerup', () => { void finishWorkspaceDrag(); });
-document.addEventListener('pointercancel', () => { void finishWorkspaceDrag(true); });
+document.addEventListener('pointerup', (event) => {
+  if (event.pointerId === wsDragState?.pointerId) void finishWorkspaceDrag();
+});
+document.addEventListener('pointercancel', (event) => {
+  if (event.pointerId === wsDragState?.pointerId) void finishWorkspaceDrag(true);
+});
+window.addEventListener('blur', () => { void finishWorkspaceDrag(true); });
 
 async function addWorkspace() {
   const trimmed = await openPrompt('新建工作区', '名称');

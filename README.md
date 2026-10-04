@@ -33,6 +33,8 @@ core/src/
 
 ## 验证
 
+应用图标源文件为 `icon/图标.png`，桌面 GUI 左上角和浏览器预览直接引用它。更新后运行 `npm run icons:build`，统一生成托盘、窗口、安装包和 Web 设置控制台使用的图标，再运行 `npm run tauri:build` 重新打包；已运行的应用需退出后重启才能载入新的托盘图标。
+
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
