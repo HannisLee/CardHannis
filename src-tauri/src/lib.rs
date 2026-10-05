@@ -1,7 +1,7 @@
 use cardhannis_core::{TaskService, TaskStore};
 use std::{fs, sync::Arc, time::Duration};
 use tauri::{
-    Manager,
+    Emitter, Manager,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
@@ -449,6 +449,21 @@ pub fn run() {
             let service = Arc::new(TaskService::new(store));
             let web = crate::web::WebConsoleState::new(service.clone(), database_path);
             if let Some(window) = app.get_webview_window("main") {
+                let _ = window.with_webview(|webview| {
+                    #[cfg(target_os = "macos")]
+                    unsafe {
+                        use objc2_app_kit::NSWindowCollectionBehavior as Behavior;
+
+                        let ns_window: &objc2_app_kit::NSWindow = &*webview.ns_window().cast();
+                        let mut behavior = ns_window.collectionBehavior();
+                        // 浮动层级默认可能不参与 Mission Control；显式纳入系统窗口管理。
+                        // 同组行为互斥，先清除冲突标记，并保留配置中的所有桌面显示行为。
+                        behavior &=
+                            !(Behavior::Transient | Behavior::Stationary | Behavior::IgnoresCycle);
+                        behavior |= Behavior::Managed | Behavior::ParticipatesInCycle;
+                        ns_window.setCollectionBehavior(behavior);
+                    }
+                });
                 if let Ok(size) = window.outer_size() {
                     if size.width < 100 || size.height < 100 {
                         let _ = window
@@ -471,17 +486,31 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 auto_sync.auto_sync_loop().await;
             });
+
+            // 后台兜底执行 2 小时计时上限；即使窗口隐藏或应用重启，也能把会话
+            // 精确结束在 started_at + 2h，并让任务回到待办。
+            let expiration_service = service.clone();
+            let expiration_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(5));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    ticker.tick().await;
+                    match expiration_service.expire_work_sessions() {
+                        Ok(expired) if !expired.is_empty() => {
+                            let _ = expiration_handle.emit("work-sessions-expired", &expired);
+                        }
+                        Ok(_) => {}
+                        Err(error) => eprintln!("检查工作会话计时上限失败: {error}"),
+                    }
+                }
+            });
             let hostname = if cfg!(target_os = "windows") {
                 std::env::var("COMPUTERNAME").unwrap_or_else(|_| "device".into())
             } else {
                 std::env::var("HOSTNAME").unwrap_or_else(|_| "device".into())
             };
             let device_id = format!("{}-{}", std::env::consts::OS, hostname);
-            #[cfg(target_os = "macos")]
-            let _ = app
-                .handle()
-                .set_activation_policy(tauri::ActivationPolicy::Accessory);
-
             let toggle_item =
                 MenuItem::with_id(app, "toggle-window", "显示 / 隐藏窗口", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出 CardHannis", true, None::<&str>)?;

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LogicalSize } from '@tauri-apps/api/dpi';
 import appIconUrl from '../../icon/图标.png';
@@ -39,21 +40,152 @@ if (!fontFamilyOptions[fontFamilyChoice]) fontFamilyChoice = 'system';
 let alwaysShowContent = localStorage.getItem(ALWAYS_SHOW_CONTENT_KEY) === '1';
 let mouseInside = false;
 let mouseInTitleBar = false;
-let taskDialogOriginalSize = null;
 let initialDataLoaded = false;
 let lastSyncedAtSeen = null;
 const TASK_DIALOG_WINDOW_HEIGHT = 440;
+const EXPANDED_WINDOW_HEIGHT_KEY = 'cardhannis.sticky.expanded-height.v1';
+const NATIVE_WINDOW_MIN_HEIGHT = 64;
+const EXPANDED_WINDOW_MIN_HEIGHT = 120;
+const NATIVE_WINDOW_COLLAPSE_DELAY_MS = 200;
 let zeroOpacityExpanded = false;
 function normalizeOpacity(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 100;
   return Math.min(100, Math.max(0, Math.round(parsed / 5) * 5));
 }
+function normalizeExpandedWindowHeight(value) {
+  const parsed = Number(value);
+  // 64 是“仅标题栏”的原生窗口高度，不能被误当成展开高度；
+  // 旧数据里一旦写入这个值，恢复时就只剩几像素内容区。
+  if (!Number.isFinite(parsed) || parsed < EXPANDED_WINDOW_MIN_HEIGHT) return 400;
+  return Math.min(2000, Math.max(EXPANDED_WINDOW_MIN_HEIGHT, Math.round(parsed)));
+}
+let expandedWindowHeight = normalizeExpandedWindowHeight(localStorage.getItem(EXPANDED_WINDOW_HEIGHT_KEY));
+let nativeWindowHeightTimer = null;
+let nativeWindowHeightBusy = false;
+let programmaticWindowHeight = null;
+let programmaticWindowHeightToken = 0;
+let nativeWindowResizeTrackingReady = false;
+function anyDialogOpen() {
+  return document.querySelector('dialog[open]') !== null;
+}
+function shouldCollapseNativeWindow() {
+  return unfocusedOpacity === 0 && !alwaysShowContent && !zeroOpacityExpanded;
+}
+function collapsedWindowHeight() {
+  const win = document.querySelector('.win');
+  const sheet = document.querySelector('.win-sheet');
+  const bar = document.querySelector('.win-bar');
+  if (!win || !sheet || !bar) return NATIVE_WINDOW_MIN_HEIGHT;
+  const winStyle = getComputedStyle(win);
+  const sheetStyle = getComputedStyle(sheet);
+  const barRect = bar.getBoundingClientRect();
+  const height = barRect.bottom
+    + Number.parseFloat(winStyle.paddingBottom)
+    + Number.parseFloat(sheetStyle.borderBottomWidth);
+  return Math.max(NATIVE_WINDOW_MIN_HEIGHT, Math.ceil(height));
+}
+function clearNativeWindowHeightTimer() {
+  if (nativeWindowHeightTimer != null) {
+    clearTimeout(nativeWindowHeightTimer);
+    nativeWindowHeightTimer = null;
+  }
+}
+function scheduleNativeWindowHeight(options = {}) {
+  if (!isTauri()) return;
+  clearNativeWindowHeightTimer();
+  if (anyDialogOpen()) return;
+  const collapse = shouldCollapseNativeWindow();
+  const delay = options.immediate || !collapse ? 0 : NATIVE_WINDOW_COLLAPSE_DELAY_MS;
+  nativeWindowHeightTimer = setTimeout(() => {
+    nativeWindowHeightTimer = null;
+    void applyNativeWindowHeight();
+  }, delay);
+}
+async function currentLogicalWindowSize(w) {
+  const [size, scale] = await Promise.all([w.outerSize(), w.scaleFactor()]);
+  return size.toLogical(scale);
+}
+async function resizeNativeWindowHeight(height, options = {}) {
+  const w = theWindow();
+  if (!w) return false;
+  if (nativeWindowHeightBusy) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return resizeNativeWindowHeight(height, options);
+  }
+  nativeWindowHeightBusy = true;
+  const token = ++programmaticWindowHeightToken;
+  programmaticWindowHeight = height;
+  try {
+    const [size, scale, position] = await Promise.all([w.outerSize(), w.scaleFactor(), w.outerPosition()]);
+    const logicalSize = size.toLogical(scale);
+    if (!options.force && Math.abs(logicalSize.height - height) < 0.5) return false;
+    await w.setSize(new LogicalSize(logicalSize.width, height));
+    const nextPosition = await w.outerPosition();
+    if (nextPosition.x !== position.x || nextPosition.y !== position.y) {
+      await w.setPosition(position);
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    nativeWindowHeightBusy = false;
+    setTimeout(() => {
+      if (token === programmaticWindowHeightToken) programmaticWindowHeight = null;
+    }, 1000);
+  }
+}
+async function applyNativeWindowHeight() {
+  if (!isTauri() || anyDialogOpen()) return;
+  if (nativeWindowHeightBusy) {
+    scheduleNativeWindowHeight({ immediate: true });
+    return;
+  }
+  const collapse = shouldCollapseNativeWindow();
+  if (collapse) await rememberCurrentExpandedWindowHeight();
+  const height = collapse ? collapsedWindowHeight() : expandedWindowHeight;
+  await resizeNativeWindowHeight(height);
+}
+function persistExpandedWindowHeight(height) {
+  if (height < EXPANDED_WINDOW_MIN_HEIGHT) return;
+  expandedWindowHeight = normalizeExpandedWindowHeight(height);
+  localStorage.setItem(EXPANDED_WINDOW_HEIGHT_KEY, String(expandedWindowHeight));
+}
+async function setupNativeWindowResizeTracking() {
+  const w = theWindow();
+  if (!w) return;
+  try {
+    await w.onResized(async (event) => {
+      if (!nativeWindowResizeTrackingReady || nativeWindowHeightBusy || anyDialogOpen()) return;
+      const scale = await w.scaleFactor();
+      const logicalHeight = event.payload.toLogical(scale).height;
+      if (programmaticWindowHeight != null) return;
+      if (logicalHeight < EXPANDED_WINDOW_MIN_HEIGHT) return;
+      if (!shouldCollapseNativeWindow()) persistExpandedWindowHeight(logicalHeight);
+    });
+  } catch {}
+}
+async function rememberCurrentExpandedWindowHeight() {
+  const w = theWindow();
+  if (!w) return;
+  try {
+    const logicalSize = await currentLogicalWindowSize(w);
+    if (logicalSize.height >= EXPANDED_WINDOW_MIN_HEIGHT) {
+      persistExpandedWindowHeight(logicalSize.height);
+    }
+  } catch {}
+}
+async function initializeNativeWindowHeight() {
+  await setupNativeWindowResizeTracking();
+  nativeWindowResizeTrackingReady = true;
+  scheduleNativeWindowHeight({ immediate: true });
+}
 function applyContentOpacity() {
   const expanded = alwaysShowContent || (unfocusedOpacity === 0 ? zeroOpacityExpanded : mouseInside);
   const opacity = expanded ? 100 : unfocusedOpacity;
   document.documentElement.style.setProperty('--content-opacity', (opacity / 100).toFixed(2));
   document.documentElement.classList.toggle('content-hidden', opacity === 0);
+  scheduleNativeWindowHeight();
 }
 let collapsed = {};
 try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch {}
@@ -206,16 +338,16 @@ function row(task) {
       <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">${ICONS.block}</button>
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">${ICONS.done}</button>`;
   } else {
-    actions = `<button class="nb" data-action="work" ${d} title="开始工作（计时）" type="button">${ICONS.start}</button>
+    actions = `<button class="nb" data-action="work" ${d} title="开始工作（计时，最多 2 小时）" type="button">${ICONS.start}</button>
       <button class="nb" data-action="block" ${d} title="标记阻塞" type="button">${ICONS.block}</button>
       <button class="nb ok" data-action="complete" ${d} ${v} title="完成任务" type="button">${ICONS.done}</button>`;
   }
   const activeTimer = !done && task.status === 'in_progress' && !task.is_blocked
-    ? `<span class="active-timer" data-active-timer="${task.id}" title="累计活动时间（含历史会话）">${ICONS.clock}<span>${fmtDuration(state.sessionMinutesByTask[task.id] || 0)}</span></span>` : '';
+    ? `<span class="active-timer" data-active-timer="${task.id}" title="累计活动时间（单次最多 2 小时）">${ICONS.clock}<span>${fmtDuration(state.sessionMinutesByTask[task.id] || 0)}</span></span>` : '';
   const statusSlot = done
     ? `<span class="done-meta" title="分级 · 完成时间 · 实际工作时间">${escapeHtml(prioName(task))} · ${fmtDateTime(task.completed_at)} · ${fmtDuration(state.sessionMinutesByTask[task.id])}</span>`
     : `<span class="meta-pills">${activeTimer}<span class="pill ${pill.cls}">${pill.label}</span></span>`;
-  return `<div class="row ${done ? 'done' : ''}" data-id="${task.id}" data-version="${task.version}" title="${tip}">
+  return `<div class="row ${done ? 'done' : ''}" data-id="${task.id}" data-prio="${task.priority_id || ''}" data-version="${task.version}" title="${tip}">
     <span class="rt">${escapeHtml(task.title)}</span>
     ${statusSlot}
     <span class="ra">${actions}</span>
@@ -363,12 +495,14 @@ function render() {
     localStorage.setItem(FONT_SIZE_KEY, String(fontSizeDelta));
     document.querySelector('#font-size-val').textContent = formatFontSizeDelta(fontSizeDelta);
     applyFontSize();
+    scheduleNativeWindowHeight();
   });
   document.querySelector('#font-family-select')?.addEventListener('change', (e) => {
     if (!fontFamilyOptions[e.target.value]) return;
     fontFamilyChoice = e.target.value;
     localStorage.setItem(FONT_FAMILY_KEY, fontFamilyChoice);
     applyFontFamily();
+    scheduleNativeWindowHeight();
   });
   document.querySelector('#btn-web')?.addEventListener('click', async () => {
     try {
@@ -399,6 +533,9 @@ function render() {
   }));
   document.querySelectorAll('[data-gact]').forEach((b) => b.addEventListener('click', () => handleGroupTool(b)));
   document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button)));
+  // 只有分级分组内的未完成任务可以拖动（跨分级移动）；「已完成」列表和行内按钮不参与。
+  document.querySelectorAll('.sec .row').forEach((element) => element.addEventListener('pointerdown', startTaskDrag));
+  scheduleNativeWindowHeight();
 }
 
 let wsDragState = null;
@@ -520,6 +657,141 @@ document.addEventListener('pointercancel', (event) => {
 });
 window.addEventListener('blur', () => { void finishWorkspaceDrag(true); });
 
+// ===== 任务条目拖动（跨分级） =====
+// 和工作区标签一样用 Pointer Events 自绘拖拽：拖动时克隆一条浮层跟随指针，
+// 指针落在哪个分级就高亮哪个分组，松手后通过 update_task 改 priority_id（工作区不变）。
+let taskDragState = null;
+let taskDropSection = null;
+
+function prioritySectionAtPoint(x, y) {
+  for (const section of document.querySelectorAll('.win-body .sec')) {
+    const rect = section.getBoundingClientRect();
+    if (y < rect.top - 2 || y > rect.bottom + 2) continue;
+    if (x < rect.left - 24 || x > rect.right + 24) continue;
+    return section;
+  }
+  return null;
+}
+function clearTaskDropTarget() {
+  if (taskDropSection) taskDropSection.classList.remove('drop-target');
+  taskDropSection = null;
+}
+function autoScrollTaskList(clientY) {
+  const body = document.querySelector('.win-body');
+  if (!body || body.scrollHeight <= body.clientHeight) return;
+  const rect = body.getBoundingClientRect();
+  if (clientY < rect.top + 16) body.scrollTop -= 8;
+  else if (clientY > rect.bottom - 16) body.scrollTop += 8;
+}
+function positionTaskGhost(ghost, clientX, clientY) {
+  const left = Math.min(Math.max(4, clientX - ghost.offsetWidth / 2), Math.max(4, window.innerWidth - ghost.offsetWidth - 4));
+  const top = Math.min(Math.max(4, clientY - ghost.offsetHeight / 2), Math.max(4, window.innerHeight - ghost.offsetHeight - 4));
+  ghost.style.left = `${left}px`;
+  ghost.style.top = `${top}px`;
+}
+function buildTaskGhost(sourceRow, clientX, clientY) {
+  const rect = sourceRow.getBoundingClientRect();
+  const ghost = sourceRow.cloneNode(true);
+  ghost.classList.remove('dragging');
+  ghost.classList.add('row-ghost');
+  ghost.style.width = `${rect.width}px`;
+  document.body.appendChild(ghost);
+  positionTaskGhost(ghost, clientX, clientY);
+  return ghost;
+}
+function startTaskDrag(event) {
+  if (event.button !== 0 || event.target.closest('button')) return;
+  const rowElement = event.currentTarget;
+  const section = rowElement.closest('.sec');
+  const task = state.tasks.find((item) => item.id === rowElement.dataset.id);
+  if (!task || !section || !section.dataset.prio) return;
+  if (task.status === 'completed' || task.workspace_id === 'done') return;
+  try { rowElement.setPointerCapture(event.pointerId); } catch {}
+  clearTaskDropTarget();
+  taskDragState = {
+    taskId: task.id,
+    element: rowElement,
+    ghost: null,
+    startX: event.clientX,
+    startY: event.clientY,
+    dragging: false,
+  };
+}
+document.addEventListener('pointermove', (event) => {
+  const drag = taskDragState;
+  if (!drag) return;
+  const dx = event.clientX - drag.startX;
+  const dy = event.clientY - drag.startY;
+  if (!drag.dragging) {
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+    drag.dragging = true;
+    drag.element.classList.add('dragging');
+    document.body.classList.add('task-drag-active');
+    drag.ghost = buildTaskGhost(drag.element, event.clientX, event.clientY);
+  }
+  event.preventDefault();
+  positionTaskGhost(drag.ghost, event.clientX, event.clientY);
+  autoScrollTaskList(event.clientY);
+
+  const section = prioritySectionAtPoint(event.clientX, event.clientY);
+  const targetPrio = section && section.dataset.prio !== 'none' ? section.dataset.prio : null;
+  if (targetPrio !== (taskDropSection ? taskDropSection.dataset.prio : null)) {
+    clearTaskDropTarget();
+    if (targetPrio) {
+      taskDropSection = section;
+      section.classList.add('drop-target');
+    }
+  }
+});
+async function finishTaskDrag(cancelled = false) {
+  const drag = taskDragState;
+  if (!drag) return;
+  taskDragState = null;
+  const targetPrio = taskDropSection ? taskDropSection.dataset.prio : null;
+  clearTaskDropTarget();
+  drag.element.classList.remove('dragging');
+  if (drag.ghost) drag.ghost.remove();
+  document.body.classList.remove('task-drag-active');
+  if (!drag.dragging) return;
+  if (cancelled || !targetPrio || targetPrio === 'none') return;
+  const task = state.tasks.find((item) => item.id === drag.taskId);
+  if (!task || task.priority_id === targetPrio) return;
+  await moveTaskToPriority(task, targetPrio);
+}
+document.addEventListener('pointerup', () => { void finishTaskDrag(); });
+document.addEventListener('pointercancel', () => { void finishTaskDrag(true); });
+
+// 跨分级移动复用 update_task：只改 priority_id，工作区和其余字段保持原值。
+async function moveTaskToPriority(task, priorityId) {
+  const expectedVersion = task.version;
+  const previousPriority = task.priority_id;
+  const targetName = (state.prios.find((priority) => priority.id === priorityId) || {}).name || '分级';
+  // 先本地落位，避免等待命令返回时条目仍停在原分级。
+  task.priority_id = priorityId;
+  render();
+  try {
+    await call('update_task', {
+      id: task.id,
+      expectedVersion,
+      input: {
+        title: task.title,
+        notes: task.notes ?? null,
+        reviewNotes: task.review_notes ?? null,
+        estimatedActiveMinutes: task.estimated_active_minutes ?? null,
+        dueDate: task.due_date || null,
+        workspaceId: task.workspace_id,
+        priorityId: priorityId,
+      },
+    });
+    await loadTasks();
+    notify(`已移动到「${targetName}」`);
+  } catch (error) {
+    task.priority_id = previousPriority;
+    await loadTasks();
+    notify(errorMessage(error, '移动任务失败'));
+  }
+}
+
 async function addWorkspace() {
   const trimmed = await openPrompt('新建工作区', '名称');
   if (!trimmed) return;
@@ -589,25 +861,17 @@ async function handleGroupTool(button) {
 async function expandWindowForTaskDialog() {
   const w = theWindow();
   if (!w) return;
+  clearNativeWindowHeightTimer();
   try {
-    const [size, scale] = await Promise.all([w.outerSize(), w.scaleFactor()]);
-    const logicalSize = size.toLogical(scale);
+    const logicalSize = await currentLogicalWindowSize(w);
     if (logicalSize.height >= TASK_DIALOG_WINDOW_HEIGHT) return;
-    taskDialogOriginalSize = logicalSize;
-    await w.setSize(new LogicalSize(logicalSize.width, TASK_DIALOG_WINDOW_HEIGHT));
-  } catch (error) {
-    taskDialogOriginalSize = null;
-  }
+    await resizeNativeWindowHeight(TASK_DIALOG_WINDOW_HEIGHT, { force: true });
+  } catch {}
 }
 
 async function restoreWindowAfterTaskDialog() {
-  const w = theWindow();
-  const originalSize = taskDialogOriginalSize;
-  taskDialogOriginalSize = null;
-  if (!w || !originalSize) return;
-  try {
-    await w.setSize(new LogicalSize(originalSize.width, originalSize.height));
-  } catch {}
+  clearNativeWindowHeightTimer();
+  scheduleNativeWindowHeight({ immediate: true });
 }
 
 async function openTaskDialog(prioId, task = null) {
@@ -948,7 +1212,7 @@ async function loadMeta() {
   if (!state.activeWs) state.activeWs = state.workspaces[0]?.id || null;
 }
 
-async function loadTasks() {
+async function loadTasks(shouldRender = true) {
   state.tasks = await call('list_tasks');
   state.blocksByTask = {};
   state.sessionsByTask = {};
@@ -973,7 +1237,20 @@ async function loadTasks() {
     const sessions = await call('list_sessions', { taskId: task.id });
     state.sessionMinutesByTask[task.id] = totalSessionMinutes(task, sessions);
   }));
-  render();
+  if (shouldRender) render();
+}
+
+async function listenForWorkSessionExpiration() {
+  if (!isTauri()) return;
+  try {
+    await listen('work-sessions-expired', async (event) => {
+      // 弹窗内避免整页重绘导致对话框被移除；状态仍会刷新，版本冲突由核心层保护。
+      const hasOpenDialog = Boolean(document.querySelector('dialog[open]'));
+      await loadTasks(!hasOpenDialog);
+      const count = Array.isArray(event.payload) ? event.payload.length : 1;
+      notify(count > 1 ? `${count} 个任务计时已达 2 小时，已回到待办` : '计时已达 2 小时，任务已回到待办');
+    });
+  } catch {}
 }
 
 async function loadSyncStatus() {
@@ -1293,7 +1570,9 @@ function notify(message) {
 
 render();
 updateMouseInside();
+void initializeNativeWindowHeight();
 void loadSystemFonts();
+void listenForWorkSessionExpiration();
 (async () => {
   const w = theWindow();
   if (w) {

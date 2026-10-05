@@ -1,5 +1,5 @@
 use crate::{domain::*, error::*, persistence::TaskStore};
-use chrono::{SecondsFormat, Utc};
+use chrono::{Duration, SecondsFormat, Utc};
 
 /// 面向 GUI、HTTP API、CLI 的稳定业务门面。
 /// 适配层只需要把自己的请求 DTO 转换成这里的命令，不需要了解 SQLite。
@@ -79,6 +79,12 @@ impl TaskService {
 
     pub fn finish_work(&self, session_id: &str) -> Result<WorkSession> {
         self.store.end_work(session_id, now())
+    }
+
+    /// 系统后台调用：结束超过 2 小时的活动会话，并把任务退回待处理。
+    pub fn expire_work_sessions(&self) -> Result<Vec<Task>> {
+        self.store
+            .expire_work_sessions_at(Duration::hours(2), now())
     }
 
     pub fn correct_work_time(

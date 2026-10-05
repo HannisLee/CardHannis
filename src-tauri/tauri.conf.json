@@ -17,12 +17,13 @@
         "height": 400,
         "visible": true,
         "minWidth": 320,
-        "minHeight": 280,
+        "minHeight": 64,
         "resizable": true,
         "decorations": false,
         "transparent": true,
         "shadow": false,
         "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
         "maximizable": false,
         "fullscreen": false
       }

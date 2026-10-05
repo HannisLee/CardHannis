@@ -609,6 +609,41 @@ mod tests {
     }
 
     #[test]
+    fn active_work_session_expires_after_two_hours() {
+        let service = service();
+        let task = create(&service);
+        service
+            .store()
+            .start_work(&task.id, "2026-01-01T08:00:00.000Z", None)
+            .unwrap();
+
+        let unchanged = service
+            .store()
+            .expire_work_sessions_at(chrono::Duration::hours(2), "2026-01-01T09:59:59.999Z")
+            .unwrap();
+        assert!(unchanged.is_empty());
+        let task = service.get(&task.id).unwrap().unwrap();
+        assert_eq!(task.status, TaskStatus::InProgress);
+        assert_eq!(task.version, 2);
+
+        let expired = service
+            .store()
+            .expire_work_sessions_at(chrono::Duration::hours(2), "2026-01-01T10:00:00.001Z")
+            .unwrap();
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].status, TaskStatus::Pending);
+        assert_eq!(expired[0].version, task.version + 1);
+
+        let sessions = service.sessions(&task.id).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].ended_at.as_deref(),
+            Some("2026-01-01T10:00:00.000Z")
+        );
+        assert_eq!(expired[0].started_at, None);
+    }
+
+    #[test]
     fn unblock_returns_to_pending_and_reopen_works() {
         let service = service();
         let task = create(&service);

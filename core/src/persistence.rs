@@ -281,6 +281,80 @@ impl TaskStore {
         self.get_session(&id)?.ok_or(CoreError::SessionNotFound(id))
     }
 
+    /// 结束超过最长计时时长的活动会话，并把对应任务退回待处理。
+    ///
+    /// 会话结束时间固定为 `started_at + max_duration`，即使后台检查晚于边界，
+    /// 也不会把 2 小时之后的时间计入活动时长。该方法在同一事务内读取版本并更新，
+    /// 由系统定时触发，不需要调用方预先持有 UI 展示的版本号。
+    pub fn expire_work_sessions_at(
+        &self,
+        max_duration: Duration,
+        now_at: impl Into<String>,
+    ) -> Result<Vec<Task>> {
+        if max_duration <= Duration::zero() {
+            return Err(CoreError::InvalidInput(
+                "工作会话最长计时时长必须大于 0".into(),
+            ));
+        }
+
+        let now_at = now_at.into();
+        let now = parse_timestamp(&now_at)?;
+        let connection = self.connection.lock().expect("database mutex poisoned");
+        let tx = connection.unchecked_transaction()?;
+        let expiring = {
+            let mut statement = tx.prepare(
+                "SELECT s.id, s.task_id, s.started_at, t.version
+                 FROM work_sessions s
+                 JOIN tasks t ON t.id = s.task_id
+                 WHERE s.ended_at IS NULL
+                   AND t.deleted_at IS NULL
+                   AND t.status = 'in_progress'",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+
+        let mut task_ids = Vec::new();
+        for (session_id, task_id, started_at, expected_version) in expiring {
+            let started_at = parse_timestamp(&started_at)?;
+            if now.signed_duration_since(started_at) < max_duration {
+                continue;
+            }
+
+            let ended_at = format_timestamp(started_at + max_duration);
+            tx.execute(
+                "UPDATE work_sessions SET ended_at = ?1 WHERE id = ?2 AND ended_at IS NULL",
+                params![ended_at, session_id],
+            )?;
+            let changed = tx.execute(
+                "UPDATE tasks SET status = 'pending', started_at = NULL, completed_at = NULL, updated_at = ?1, version = version + 1
+                 WHERE id = ?2 AND version = ?3 AND deleted_at IS NULL AND status = 'in_progress'",
+                params![now_at, task_id, expected_version],
+            )?;
+            if changed == 0 {
+                return Err(CoreError::VersionConflict);
+            }
+            task_ids.push(task_id);
+        }
+        tx.commit()?;
+        drop(connection);
+
+        task_ids
+            .iter()
+            .map(|id| {
+                self.get_task(id)?
+                    .ok_or_else(|| CoreError::TaskNotFound(id.to_owned()))
+            })
+            .collect()
+    }
+
     pub fn end_work(&self, session_id: &str, ended_at: impl Into<String>) -> Result<WorkSession> {
         let ended_at = ended_at.into();
         let connection = self.connection.lock().expect("database mutex poisoned");

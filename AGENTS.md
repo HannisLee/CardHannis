@@ -8,7 +8,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 
 - 任务生命周期：待处理（`pending`）、进行中（`in_progress`）、已完成（`completed`）。
 - 任务阻塞记录：一个任务可以有多段历史阻塞，但同时最多一个未结束阻塞。
-- 工作会话记录：一个任务同时最多一个未结束工作会话。
+- 工作会话记录：一个任务同时最多一个未结束工作会话；每个活动会话最长计时 2 小时，到时自动结束并让任务回到待办。
 - SQLite 持久化、内置迁移、软删除和基于 `version` 的乐观并发控制。
 - 共享业务边界：`cardhannis-core` 的 `TaskService` 供桌面端、CLI 等适配层使用。
 
@@ -76,9 +76,10 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 自动同步在桌面端启动后运行，默认每 10 分钟执行一次双向合并；Web 设置页左下角显示数据库连接状态，「立即同步」按钮复用同一流程。首次同步若本地仅有迁移生成的固定种子记录且远端已有数据，必须以远端快照为准，不能上传这些种子。
 - 同步使用 Supabase Auth 邮箱/密码换取 authenticated JWT，再通过 Data API 访问 5 张表；远端表均有 `user_id`，RLS 使用 `auth.uid()` 隔离数据，anon 无权限。
 - 同步合并逻辑位于 `core/src/sync.rs`，按 `updated_at` / `version` 选择较新记录；合并后的完整快照必须原子替换本地同步表，避免首次同步遗留迁移种子；本地落库必须通过 `TaskService::apply_sync_snapshot`，不得在适配层直接改 SQLite。
-- 桌面端以 macOS 菜单栏常驻图标运行，不再显示 Dock 图标；左键菜单栏图标可显示/隐藏主窗口，右键菜单可退出。
+- 桌面端以 macOS 菜单栏常驻图标运行，同时在 Dock 显示应用图标；左键菜单栏图标可显示/隐藏主窗口，右键菜单可退出。
+- macOS 便签窗口保留置顶，默认在所有桌面显示（`visibleOnAllWorkspaces`），原生窗口显式设置 `Managed` / `ParticipatesInCycle` 并清除互斥的 `Transient` / `Stationary` / `IgnoresCycle`，以参与 Mission Control 窗口总览；所有桌面显示不等同于覆盖全屏应用。
 - Windows 端使用系统托盘常驻图标；关闭按钮隐藏主窗口，应用仍保留在托盘。
-- 桌面端（`ui/src`）当前为 340×400 置顶便签小窗：横向工作区标签（普通工作区可拖动排序，「已完成」固定最后）+ 纵向可收起分级 + 单行条目（标题+状态/元信息+行内按钮）；已完成任务归档到内置「已完成」工作区；标题栏始终不透明，下面的内容区支持失焦透明度和字号微调，透明度为 0 时须从标题栏唤醒；自绘拖拽；应用内弹窗（webview 无原生 prompt/confirm）。
+- 桌面端（`ui/src`）当前为 340×400 置顶便签小窗：横向工作区标签（普通工作区可拖动排序，「已完成」固定最后）+ 纵向可收起分级 + 单行条目（标题+状态/元信息+行内按钮）；已完成任务归档到内置「已完成」工作区；标题栏始终不透明，下面的内容区支持失焦透明度和字号微调，透明度为 0 时须从标题栏唤醒；完全隐藏时原生窗口会收缩到标题栏，让背后的应用可点击，再次悬停标题栏恢复展开高度；自绘拖拽（工作区标签拖动排序 + 任务条目跨分级拖动）；应用内弹窗（webview 无原生 prompt/confirm）。
 
 ## 领域不变量
 
@@ -93,6 +94,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 已完成任务不能开始工作或创建阻塞。
 - 任务被阻塞时不能开始新的工作；开始阻塞会结束该任务当前未结束的工作会话。
 - 任务从进行中转为待处理或完成时，核心层会结束当前活动工作会话，保证累计活动时间落库。
+- 每个工作会话最长计时 2 小时；`TaskService::expire_work_sessions` / `TaskStore::expire_work_sessions_at` 在同一事务中把活动会话结束在 `started_at + 2h`，并把任务退回 `pending`。桌面端后台定时调用该服务，应用关闭期间超时的会话在下次启动后补记结束。
 - 同一任务最多一个活动阻塞（由 SQLite 部分唯一索引 `ux_task_blocks_one_active` 保证）。
 - 同一任务最多一个活动工作会话（由 `ux_work_sessions_one_active` 保证）；`task_blocks.resolution_reason` 保存可选解除阻塞原因。
 - `TaskService::correct_work_time` / 桌面 `correct_work_time` 命令用于按目标总分钟数修正历史工作会话；修正直接更新 `work_sessions` 的时间边界，遵守阻塞区间与 `completed_at`，不新增独立修正字段。
@@ -101,7 +103,7 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 迁移通过 `schema_migrations` 表记录执行进度，Rust 按文件名顺序执行 `core/migrations/*.sql`；新增迁移直接加文件，不要改历史文件。
 - 任务状态共四态：`pending` / `in_progress` / `waiting`（等待中，解除阻塞后的默认落点）/ `completed`；阻塞不是状态，由未结束的阻塞记录派生。
 - 已完成任务可通过 `reopen`（`TaskService::reopen` / 桌面 `reopen_task` 命令）回到 `pending`。
-- `workspaces`、`priorities` 是用户可管理实体（增/改名/软删/排序）；只有「已完成」是内置工作区且始终排在最后。每个分级只属于一个工作区，新建工作区自动创建 P0/P1/P2。删除前提：工作区无任务、分级无任务且该工作区至少保留一个分级；任务所选分级必须属于其工作区。工作区排序通过 `TaskService::reorder_workspaces` / 桌面 `reorder_workspaces` 命令批量提交 ID 与 `expected_version`。任务的 `workspace_id`/`priority_id` 可为空（旧数据由迁移回填并按工作区拆分）。
+- `workspaces`、`priorities` 是用户可管理实体（增/改名/软删/排序）；只有「已完成」是内置工作区且始终排在最后。每个分级只属于一个工作区，新建工作区自动创建 P0/P1/P2。删除前提：工作区无任务、分级无任务且该工作区至少保留一个分级；任务所选分级必须属于其工作区。工作区排序通过 `TaskService::reorder_workspaces` / 桌面 `reorder_workspaces` 命令批量提交 ID 与 `expected_version`。任务的 `workspace_id`/`priority_id` 可为空（旧数据由迁移回填并按工作区拆分）。桌面端可在同一个工作区内把一个任务从一个分级拖到另一个分级（如 P0 → P1）：复用 `update_task`，只改 `priority_id`、`workspace_id` 保持原值，并带 `expected_version` 做并发校验；跨工作区与「已完成」列表不允许拖动。
 
 ## 常用命令
 
@@ -144,7 +146,8 @@ npm run tauri:build
 
 - 重复阻塞历史能够保留；
 - 版本号并发控制和任务生命周期；
-- 开始阻塞会结束活动工作会话。
+- 开始阻塞会结束活动工作会话；
+- 活动工作会话达到 2 小时后自动结束并回到待办。
 
 改动核心业务时，优先补充这些测试或在相邻模块增加单元测试。至少运行：
 

@@ -203,3 +203,14 @@ dialog::backdrop { background: rgba(40, 46, 38, .3); backdrop-filter: blur(2px);
 .set-web { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: calc(14px + var(--ui-font-delta)); color: #62685f; }
 .set-web button { border: 0; border-radius: 7px; padding: 6px 12px; color: #fff; background: #31574a; font-size: calc(14px + var(--ui-font-delta)); font-weight: 700; }
 .set-web button:hover { background: #26473c; }
+
+/* ===== 任务条目拖动（跨分级移动） ===== */
+.sec .row { cursor: grab; }
+.sec .row.dragging { opacity: .4; cursor: grabbing; }
+body.task-drag-active { cursor: grabbing; }
+body.task-drag-active .sec .row { cursor: grabbing; }
+.sec.drop-target { border-radius: 8px; background: rgba(60, 104, 87, .1); box-shadow: inset 0 0 0 1px rgba(49, 86, 73, .36); }
+.sec.drop-target .sec-head { color: #2f6654; }
+.sec.drop-target .row-empty { color: #6f8579; }
+.row-ghost { position: fixed; z-index: 60; pointer-events: none; opacity: .96; border-radius: 6px; background: #fdfbf1; box-shadow: 0 6px 18px rgba(40, 60, 50, .28), inset 0 0 0 1px rgba(49, 86, 73, .3); }
+.row-ghost .ra { opacity: .45; }
