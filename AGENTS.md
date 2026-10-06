@@ -76,8 +76,8 @@ CardHannis 是一个本地优先的任务管理工具，核心能力包括：
 - 自动同步在桌面端启动后运行，默认每 10 分钟执行一次双向合并；Web 设置页左下角显示数据库连接状态，「立即同步」按钮复用同一流程。首次同步若本地仅有迁移生成的固定种子记录且远端已有数据，必须以远端快照为准，不能上传这些种子。
 - 同步使用 Supabase Auth 邮箱/密码换取 authenticated JWT，再通过 Data API 访问 5 张表；远端表均有 `user_id`，RLS 使用 `auth.uid()` 隔离数据，anon 无权限。
 - 同步合并逻辑位于 `core/src/sync.rs`，按 `updated_at` / `version` 选择较新记录；合并后的完整快照必须原子替换本地同步表，避免首次同步遗留迁移种子；本地落库必须通过 `TaskService::apply_sync_snapshot`，不得在适配层直接改 SQLite。
-- 桌面端以 macOS 菜单栏常驻图标运行，同时在 Dock 显示应用图标；左键菜单栏图标可显示/隐藏主窗口，右键菜单可退出。
-- macOS 便签窗口保留置顶，默认在所有桌面显示（`visibleOnAllWorkspaces`），原生窗口显式设置 `Managed` / `ParticipatesInCycle` 并清除互斥的 `Transient` / `Stationary` / `IgnoresCycle`，以参与 Mission Control 窗口总览；所有桌面显示不等同于覆盖全屏应用。
+- 桌面端以 macOS 菜单栏常驻图标运行，同时在 Dock 显示应用图标；左键菜单栏图标可显示/隐藏主窗口，右键菜单可退出。桌面设置包含开机自启动、启动时隐藏到托盘和窗口始终置顶，保存到共享数据目录的 `settings.json`；开机自启动通过 `tauri-plugin-autostart` 管理。
+- macOS 便签窗口置顶状态可在设置中持久化，默认在所有桌面显示（`visibleOnAllWorkspaces`），原生窗口显式设置 `Managed` / `ParticipatesInCycle` 并清除互斥的 `Transient` / `Stationary` / `IgnoresCycle`，以参与 Mission Control 窗口总览；所有桌面显示不等同于覆盖全屏应用。
 - Windows 端使用系统托盘常驻图标；关闭按钮隐藏主窗口，应用仍保留在托盘。
 - 桌面端（`ui/src`）当前为 340×400 置顶便签小窗：横向工作区标签（普通工作区可拖动排序，「已完成」固定最后）+ 纵向可收起分级 + 单行条目（标题+状态/元信息+行内按钮）；已完成任务归档到内置「已完成」工作区；标题栏始终不透明，下面的内容区支持失焦透明度和字号微调，透明度为 0 时须从标题栏唤醒；完全隐藏时原生窗口会收缩到标题栏，让背后的应用可点击，再次悬停标题栏恢复展开高度；自绘拖拽（工作区标签拖动排序 + 任务条目跨分级拖动）；应用内弹窗（webview 无原生 prompt/confirm）。
 
