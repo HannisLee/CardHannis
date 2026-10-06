@@ -185,8 +185,9 @@ dialog::backdrop { background: rgba(40, 46, 38, .3); backdrop-filter: blur(2px);
 #opacity-range, #font-size-range { width: 100%; accent-color: #325549; }
 .set-slider-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .set-slider-head output { min-width: 42px; color: #46695b; font-family: ui-monospace, Menlo, monospace; font-weight: 700; text-align: right; }
-.set-check { display: flex; align-items: center; gap: 7px; font-size: calc(14px + var(--ui-font-delta)); color: #62685f; }
-.set-check input { accent-color: #325549; }
+.dlg-card .set-check { display: flex; align-items: center; gap: 7px; font-size: calc(14px + var(--ui-font-delta)); color: #62685f; }
+.dlg-card .set-check input { flex: none; width: 15px; height: 15px; accent-color: #325549; }
+.dlg-card .set-check span { min-width: 0; }
 
 /* 图标尺寸对齐 */
 .nb { display: grid; place-items: center; }

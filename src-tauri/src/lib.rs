@@ -1,5 +1,10 @@
 use cardhannis_core::{TaskService, TaskStore};
-use std::{fs, sync::Arc, time::Duration};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tauri::{
     Emitter, Manager,
     menu::{Menu, MenuItem},
@@ -11,6 +16,8 @@ pub struct AppState {
     pub device_id: String,
     pub web: Arc<crate::web::WebConsoleState>,
     pub tray: tauri::tray::TrayIcon,
+    pub settings: Mutex<AppSettings>,
+    pub settings_path: PathBuf,
 }
 
 fn create_tray_icon() -> tauri::image::Image<'static> {
@@ -76,6 +83,69 @@ fn shared_data_dir(app: &tauri::App) -> std::path::PathBuf {
 
 mod web;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AppSettings {
+    pub launch_at_login: bool,
+    pub start_hidden: bool,
+    pub always_on_top: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            launch_at_login: false,
+            start_hidden: false,
+            always_on_top: true,
+        }
+    }
+}
+
+fn load_app_settings(path: &PathBuf) -> AppSettings {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
+}
+
+fn save_app_settings(path: &PathBuf, settings: AppSettings) -> Result<(), String> {
+    let contents = serde_json::to_vec_pretty(&settings)
+        .map_err(|error| format!("无法序列化应用设置: {error}"))?;
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, contents).map_err(|error| format!("无法写入应用设置: {error}"))?;
+    fs::rename(&temporary, path).map_err(|error| format!("无法保存应用设置: {error}"))
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    fn test_settings_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("cardhannis-{name}-{}.json", std::process::id()))
+    }
+
+    #[test]
+    fn app_settings_round_trip() {
+        let path = test_settings_path("settings-round-trip");
+        let settings = AppSettings {
+            launch_at_login: true,
+            start_hidden: true,
+            always_on_top: false,
+        };
+        save_app_settings(&path, settings).expect("保存设置应该成功");
+        assert_eq!(load_app_settings(&path), settings);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn invalid_app_settings_fall_back_to_defaults() {
+        let path = test_settings_path("settings-invalid");
+        fs::write(&path, "{invalid").expect("写入测试设置应该成功");
+        assert_eq!(load_app_settings(&path), AppSettings::default());
+        let _ = fs::remove_file(path);
+    }
+}
+
 fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let visible = window.is_visible().unwrap_or(false);
@@ -92,11 +162,13 @@ fn toggle_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 mod commands {
     use super::AppState;
+    use super::{AppSettings, save_app_settings};
     use cardhannis_core::{
         BlockTaskCommand, CreateTaskCommand, Priority, Task, TaskBlock, UpdateTaskCommand,
         WorkSession, Workspace,
     };
     use tauri::State;
+    use tauri_plugin_autostart::ManagerExt;
 
     fn service<'a>(
         state: &'a State<'_, AppState>,
@@ -162,6 +234,47 @@ mod commands {
         {
             Vec::new()
         }
+    }
+
+    #[tauri::command]
+    pub fn get_app_settings(
+        app: tauri::AppHandle,
+        state: State<'_, AppState>,
+    ) -> Result<AppSettings, String> {
+        let enabled = app
+            .autolaunch()
+            .is_enabled()
+            .map_err(|error| format!("无法读取开机自启动状态: {error}"))?;
+        let mut settings = state.settings.lock().expect("应用设置锁中毒");
+        if settings.launch_at_login != enabled {
+            settings.launch_at_login = enabled;
+            save_app_settings(&state.settings_path, *settings)?;
+        }
+        Ok(*settings)
+    }
+
+    #[tauri::command]
+    pub fn set_app_settings(
+        app: tauri::AppHandle,
+        state: State<'_, AppState>,
+        settings: AppSettings,
+    ) -> Result<AppSettings, String> {
+        let autolaunch = app.autolaunch();
+        if settings.launch_at_login {
+            autolaunch
+                .enable()
+                .map_err(|error| format!("无法开启开机自启动: {error}"))?;
+        } else {
+            autolaunch
+                .disable()
+                .map_err(|error| format!("无法关闭开机自启动: {error}"))?;
+        }
+
+        let mut current = state.settings.lock().expect("应用设置锁中毒");
+        *current = settings;
+        let path = state.settings_path.clone();
+        save_app_settings(&path, settings)?;
+        Ok(settings)
     }
 
     #[derive(Debug, serde::Deserialize)]
@@ -439,15 +552,23 @@ mod commands {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("CardHannis")
+                .build(),
+        )
         .setup(|app| {
             // 与 Web 原型共享同一数据库；路径解析跨平台（macOS/Windows/Linux 同一规则）
             let data_dir = shared_data_dir(&app);
             fs::create_dir_all(&data_dir)?;
             let database_path = data_dir.join("cardhannis.sqlite3");
+            let settings_path = data_dir.join("settings.json");
+            let app_settings = load_app_settings(&settings_path);
             let store =
                 TaskStore::open(database_path.clone()).map_err(|error| error.to_string())?;
             let service = Arc::new(TaskService::new(store));
             let web = crate::web::WebConsoleState::new(service.clone(), database_path);
+            let startup_show_window = !app_settings.start_hidden;
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.with_webview(|webview| {
                     #[cfg(target_os = "macos")]
@@ -470,12 +591,18 @@ pub fn run() {
                             .set_size(tauri::Size::Logical(tauri::LogicalSize::new(340.0, 400.0)));
                     }
                 }
-                let _ = window.show();
-                let _ = window.set_focus();
+                let _ = window.set_always_on_top(app_settings.always_on_top);
+                if startup_show_window {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
             }
             let startup_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(300)).await;
+                if !startup_show_window {
+                    return;
+                }
                 if let Some(window) = startup_handle.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.unminimize();
@@ -545,10 +672,14 @@ pub fn run() {
                 device_id,
                 web,
                 tray,
+                settings: Mutex::new(app_settings),
+                settings_path,
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_app_settings,
+            commands::set_app_settings,
             commands::list_tasks,
             commands::open_web_console,
             commands::sync_status,

@@ -15,6 +15,7 @@ for (const rel of ['icon', 'apple-touch-icon']) {
 
 const app = document.querySelector('#app');
 const state = { tasks: [], blocksByTask: {}, sessionsByTask: {}, finishedSessionMinutesByTask: {}, sessionMinutesByTask: {}, workspaces: [], prios: [], activeWs: null, blockingTaskId: null, unblockingTaskId: null, editingTask: null, editingTaskSessions: [], editingTaskCurrentMinutes: 0, syncStatus: null };
+const APP_SETTINGS_PREVIEW_KEY = 'cardhannis.app-settings.preview.v1';
 const COLLAPSE_KEY = 'cardha…e.v2';
 const OPACITY_KEY = 'cardhannis.sticky.opacity.v1';
 const ALWAYS_SHOW_CONTENT_KEY = 'cardhannis.content.always-visible.v1';
@@ -189,7 +190,13 @@ function applyContentOpacity() {
 }
 let collapsed = {};
 try { collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}'); } catch {}
-let pinned = true;
+let pinned = false;
+let appSettings = { launchAtLogin: false, startHidden: false, alwaysOnTop: true };
+try {
+  const savedPreviewSettings = JSON.parse(localStorage.getItem(APP_SETTINGS_PREVIEW_KEY) || 'null');
+  if (savedPreviewSettings) appSettings = normalizeAppSettings(savedPreviewSettings);
+} catch {}
+pinned = appSettings.alwaysOnTop;
 const ICONS = {
   logo: `<img class="app-icon" src="${appIconUrl}" alt="" aria-hidden="true" draggable="false" />`,
   start: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M6 18V6h2v12zm4 0l10-6l-10-6z"/></svg>',
@@ -354,6 +361,73 @@ function row(task) {
   </div>`;
 }
 
+function normalizeAppSettings(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    launchAtLogin: source.launchAtLogin === true,
+    startHidden: source.startHidden === true,
+    alwaysOnTop: source.alwaysOnTop !== false,
+  };
+}
+function refreshAppSettingsInputs() {
+  const autostart = document.querySelector('#autostart-check');
+  const startHidden = document.querySelector('#start-hidden-check');
+  const alwaysOnTop = document.querySelector('#always-on-top-check');
+  if (autostart) autostart.checked = appSettings.launchAtLogin;
+  if (startHidden) startHidden.checked = appSettings.startHidden;
+  if (alwaysOnTop) alwaysOnTop.checked = appSettings.alwaysOnTop;
+}
+function savePreviewAppSettings() {
+  if (!isTauri()) localStorage.setItem(APP_SETTINGS_PREVIEW_KEY, JSON.stringify(appSettings));
+}
+function updatePinButton() {
+  const button = document.querySelector('#btn-pin');
+  if (!button) return;
+  button.classList.toggle('on', pinned);
+  button.setAttribute('aria-pressed', String(pinned));
+}
+async function loadAppSettings() {
+  if (!isTauri()) {
+    appSettings = normalizeAppSettings(appSettings);
+    pinned = appSettings.alwaysOnTop;
+    updatePinButton();
+    refreshAppSettingsInputs();
+    return;
+  }
+  try {
+    appSettings = normalizeAppSettings(await call('get_app_settings'));
+    pinned = appSettings.alwaysOnTop;
+    updatePinButton();
+    refreshAppSettingsInputs();
+  } catch (error) {
+    notify(errorMessage(error, '无法读取应用设置'));
+  }
+}
+async function saveAppSetting(key, value) {
+  const previous = appSettings;
+  const next = normalizeAppSettings({ ...previous, [key]: value });
+  try {
+    appSettings = isTauri()
+      ? normalizeAppSettings(await call('set_app_settings', { settings: next }))
+      : next;
+    savePreviewAppSettings();
+    if (key === 'alwaysOnTop') {
+      pinned = appSettings.alwaysOnTop;
+      updatePinButton();
+      const w = theWindow();
+      if (w) await w.setAlwaysOnTop(pinned);
+    }
+    refreshAppSettingsInputs();
+    notify('设置已保存');
+    return true;
+  } catch (error) {
+    appSettings = previous;
+    refreshAppSettingsInputs();
+    notify(errorMessage(error, '无法保存设置'));
+    return false;
+  }
+}
+
 function render() {
   const opacity = normalizeOpacity(localStorage.getItem(OPACITY_KEY));
   const ws = state.workspaces.find((w) => w.id === state.activeWs) || state.workspaces[0];
@@ -458,6 +532,9 @@ function render() {
       <label>界面字体
         <select id="font-family-select">${fontFamilyOptionsMarkup()}</select>
       </label>
+      <label class="set-check"><input id="autostart-check" type="checkbox"${appSettings.launchAtLogin ? ' checked' : ''} /><span>开机自启动</span></label>
+      <label class="set-check"><input id="start-hidden-check" type="checkbox"${appSettings.startHidden ? ' checked' : ''} /><span>启动时隐藏到托盘</span></label>
+      <label class="set-check"><input id="always-on-top-check" type="checkbox"${appSettings.alwaysOnTop ? ' checked' : ''} /><span>窗口始终置顶</span></label>
       <div class="set-web">
         <span>Web 设置</span>
         <button id="btn-web" type="button">前往</button>
@@ -504,6 +581,9 @@ function render() {
     applyFontFamily();
     scheduleNativeWindowHeight();
   });
+  document.querySelector('#autostart-check')?.addEventListener('change', (e) => void saveAppSetting('launchAtLogin', e.target.checked));
+  document.querySelector('#start-hidden-check')?.addEventListener('change', (e) => void saveAppSetting('startHidden', e.target.checked));
+  document.querySelector('#always-on-top-check')?.addEventListener('change', (e) => void saveAppSetting('alwaysOnTop', e.target.checked));
   document.querySelector('#btn-web')?.addEventListener('click', async () => {
     try {
       await call('open_web_console');
@@ -970,16 +1050,32 @@ async function submitTask() {
 }
 
 async function togglePin() {
+  const nextPinned = !pinned;
+  pinned = nextPinned;
+  updatePinButton();
   const w = theWindow();
-  if (!w) { pinned = !pinned; render(); notify(pinned ? '（预览）模拟置顶' : '（预览）取消置顶'); return; }
+  if (!w) {
+    void saveAppSetting('alwaysOnTop', nextPinned);
+    notify(nextPinned ? '（预览）模拟置顶' : '（预览）取消置顶');
+    return;
+  }
   try {
-    pinned = !pinned;
+    await w.setAlwaysOnTop(nextPinned);
+    const saved = await saveAppSetting('alwaysOnTop', nextPinned);
+    if (!saved) {
+      pinned = !nextPinned;
+      updatePinButton();
+      await w.setAlwaysOnTop(pinned);
+      return;
+    }
+    notify(nextPinned ? '已置顶' : '已取消置顶');
+  } catch (error) {
+    pinned = !nextPinned;
+    updatePinButton();
     await w.setAlwaysOnTop(pinned);
-    render();
-    notify(pinned ? '已置顶' : '已取消置顶');
-  } catch (error) { pinned = !pinned; notify(errorMessage(error, '置顶失败')); }
+    notify(errorMessage(error, '置顶失败'));
+  }
 }
-
 
 async function handleAction(button) {
   const action = button.dataset.action;
@@ -1180,6 +1276,14 @@ async function previewCommand(command, args) {
   }
   if (command === 'delete_task') state.tasks = state.tasks.filter((item) => item.id !== args.id);
   if (command === 'start_work') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { task.status = 'in_progress'; task.version += 1; task.sessions = task.sessions || []; task.activeSession = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null }; task.sessions.push(task.activeSession); } }
+  if (command === 'get_app_settings') return { ...appSettings };
+  if (command === 'set_app_settings') {
+    appSettings = normalizeAppSettings(args.settings);
+    pinned = appSettings.alwaysOnTop;
+    updatePinButton();
+    savePreviewAppSettings();
+    return { ...appSettings };
+  }
   if (command === 'open_web_console') throw new Error('Web 设置仅桌面端可用');
   if (command === 'list_blocks') { const task = state.tasks.find((item) => item.id === args.taskId); return task?.activeBlock ? [task.activeBlock] : []; }
   if (command === 'block_task') { const task = state.tasks.find((item) => item.id === args.taskId); if (task) { if (task.activeSession) task.activeSession.ended_at = new Date().toISOString(); task.is_blocked = true; task.activeBlock = { id: crypto.randomUUID(), task_id: task.id, started_at: new Date().toISOString(), ended_at: null, reason: args.reason, note: args.note ?? null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), version: 1, deleted_at: null }; } }
@@ -1574,10 +1678,7 @@ void initializeNativeWindowHeight();
 void loadSystemFonts();
 void listenForWorkSessionExpiration();
 (async () => {
-  const w = theWindow();
-  if (w) {
-    try { pinned = await w.isAlwaysOnTop(); } catch {}
-  }
+  await loadAppSettings();
   await Promise.all([loadMeta(), loadTasks(), loadSyncStatus()]);
   // 启动同步与首次渲染并发执行；再读一次数据，确保拿到同步完成后的最终状态。
   await Promise.all([loadMeta(), loadTasks()]);
